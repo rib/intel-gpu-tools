@@ -6,6 +6,8 @@ bin_PROGRAMS = 				\
 	intel_error_decode 		\
 	intel_framebuffer_dump 		\
 	intel_gpu_top 			\
+	intel_oacounter_top_pmu 	\
+	intel_gpu_trace_pmu 		\
 	intel_gpu_time 			\
 	intel_gtt 			\
 	intel_iosf_sb_read		\
@@ -50,4 +52,3 @@ intel_l3_parity_SOURCES =	\
 	intel_l3_parity.c	\
 	intel_l3_parity.h	\
 	intel_l3_udev_listener.c
-
