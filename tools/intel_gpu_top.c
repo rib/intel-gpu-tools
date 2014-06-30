@@ -344,6 +344,15 @@ static void ring_sample(struct ring *ring)
 	ring->head = ring_read(ring, RING_HEAD) & HEAD_ADDR;
 	ring->tail = ring_read(ring, RING_TAIL) & TAIL_ADDR;
 
+	/* We sometimes read spurious, out of range pointers which
+	 * we want to ignore. We treat them as idle for now... */
+	if (ring->head > ring->size || ring->tail > ring->size)
+	{
+	    fprintf(stderr, "Ignoring spurious ring pointer\n");
+	    ring->idle++;
+	    return;
+	}
+
 	if (ring->tail == ring->head)
 		ring->idle++;
 
