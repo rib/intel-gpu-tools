@@ -50,7 +50,8 @@
 #define  FORCEWAKE	    0xA18C
 #define  FORCEWAKE_ACK	    0x130090
 
-#define SAMPLES_PER_SEC             10000
+/* Aim for ~2000 samples per frame @ 60fps... */
+#define SAMPLES_PER_SEC             (60 * 2000)
 #define SAMPLES_TO_PERCENT_RATIO    (SAMPLES_PER_SEC / 100)
 
 #define MAX_NUM_TOP_BITS            100
