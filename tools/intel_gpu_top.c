@@ -39,6 +39,9 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #ifdef HAVE_TERMIOS_H
 #include <termios.h>
 #endif
@@ -124,6 +127,24 @@ gettime(void)
     struct timeval t;
     gettimeofday(&t, NULL);
     return (t.tv_usec + (t.tv_sec * 1000000));
+}
+
+static int
+read_file_int(const char *file)
+{
+	char buf[32];
+	int fd, n;
+
+	fd = open(file, 0);
+	if (fd < 0)
+	    return -1;
+	n = read(fd, buf, sizeof (buf) - 1);
+	close(fd);
+	if (n < 0)
+	    return -1;
+
+	buf[n] = '\0';
+	return strtol(buf, 0, 0);
 }
 
 static int
@@ -280,6 +301,16 @@ print_clock_info(struct pci_device *pci_dev)
 		print_clock("render", render_clock);
 		printf("  ");
 		print_clock("display", display_clock);
+	} else {
+	    int max_render_clock;
+	    int cur_render_clock;
+
+	    max_render_clock = read_file_int("/sys/class/drm/card0/gt_max_freq_mhz");
+	    cur_render_clock = read_file_int("/sys/class/drm/card0/gt_cur_freq_mhz");
+
+	    print_clock("max render", max_render_clock);
+	    printf("  ");
+	    print_clock("current render", cur_render_clock);
 	}
 
 
