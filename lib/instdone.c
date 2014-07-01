@@ -381,23 +381,23 @@ init_g4x_instdone1(void)
 static void
 init_gen7_instdone(void)
 {
-	gen6_instdone1_bit(1 << 19, "GAM");
+	gen6_instdone1_bit(1 << 19, "Memory Arbiter (GAM)");
 	gen6_instdone1_bit(1 << 18, "GAFM");
-	gen6_instdone1_bit(1 << 17, "TSG");
-	gen6_instdone1_bit(1 << 16, "VFE");
+	gen6_instdone1_bit(1 << 17, "Thread Spawner (TSG)");
+	gen6_instdone1_bit(1 << 16, "Video Front-End (VFE)");
 	gen6_instdone1_bit(1 << 15, "GAFS");
 	gen6_instdone1_bit(1 << 14, "SVG");
-	gen6_instdone1_bit(1 << 13, "URBM");
-	gen6_instdone1_bit(1 << 12, "TDG");
-	gen6_instdone1_bit(1 << 9, "SF");
-	gen6_instdone1_bit(1 << 8, "CL");
-	gen6_instdone1_bit(1 << 7, "SOL");
-	gen6_instdone1_bit(1 << 6, "GS");
-	gen6_instdone1_bit(1 << 5, "DS");
-	gen6_instdone1_bit(1 << 4, "TE");
-	gen6_instdone1_bit(1 << 3, "HS");
-	gen6_instdone1_bit(1 << 2, "VS");
-	gen6_instdone1_bit(1 << 1, "VF");
+	gen6_instdone1_bit(1 << 13, "Uni. Ret. Buf. Mgr. (URBM)");
+	gen6_instdone1_bit(1 << 12, "Thread Dispatcher (TDG)");
+	gen6_instdone1_bit(1 << 9, "FF Strips & Fans (SF)");
+	gen6_instdone1_bit(1 << 8, "FF Clip Unit (CL)");
+	gen6_instdone1_bit(1 << 7, "FF Stream Output Logic (SOL)");
+	gen6_instdone1_bit(1 << 6, "FF Geometry Shader (GS)");
+	gen6_instdone1_bit(1 << 5, "FF Domain Shader (DS)");
+	gen6_instdone1_bit(1 << 4, "FF Tessellation Engine (TE)");
+	gen6_instdone1_bit(1 << 3, "FF Hull Shader (HS)");
+	gen6_instdone1_bit(1 << 2, "FF Vertex Shader (VS)");
+	gen6_instdone1_bit(1 << 1, "FF Vertex Fetch (VF)");
 }
 
 static void
