@@ -809,9 +809,8 @@ int main(int argc, char **argv)
 						printf("context = %" PRIx32 " : %d%% active",
 						       context->id, percent);
 					} else if (!context->stats[stat_i].warped) {
-						printf("   %-15s: %" PRIu64 " (%" PRIu64 "/sec)",
+						printf("   %-15s: (%" PRIu64 "/sec)",
 						       stats_reg_names[stat_i],
-						       context->stats[stat_i].end,
 						       (context->stats[stat_i].end -
 							context->stats[stat_i].start));
 					} else {
