@@ -24,6 +24,7 @@
  * Authors:
  *    Eric Anholt <eric@anholt.net>
  *    Eugeni Dodonov <eugeni.dodonov@intel.com>
+ *    Robert Bragg <robert.bragg@intel.com>
  *
  */
 
@@ -66,8 +67,6 @@ struct top_bit {
 	int count;
 } top_bits[MAX_NUM_TOP_BITS];
 struct top_bit *top_bits_sorted[MAX_NUM_TOP_BITS];
-
-static uint32_t instdone, instdone1;
 
 static const char *bars[] = {
 	" ",
@@ -118,8 +117,57 @@ const char *stats_reg_names[STATS_COUNT] = {
 	"PS depth pass",
 };
 
-uint64_t stats[STATS_COUNT];
-uint64_t last_stats[STATS_COUNT];
+struct pipeline_stat {
+	uint64_t start;
+	uint64_t end;
+	unsigned warped:1;
+};
+
+#define MAX_CONTEXTS 10
+struct context {
+	uint32_t id;
+	struct pipeline_stat stats[STATS_COUNT];
+	int n_samples;
+} contexts[MAX_CONTEXTS];
+struct context *contexts_sorted[MAX_CONTEXTS];
+
+enum rings {
+        RING_RENDER,
+        RING_BSD,
+        RING_BSD6,
+        RING_BLIT,
+        MAX_RINGS
+};
+
+static struct ring {
+	const char *name;
+	uint32_t mmio;
+	int size;
+
+	/* used for analytics... */
+	uint64_t full;
+	uint64_t idle;
+	int n_samples;
+} rings[MAX_RINGS] = {
+	{ .name = "render",    .mmio = 0x2030 },
+	{ .name = "bitstream", .mmio = 0x4030 },
+	{ .name = "bitstream", .mmio = 0x12030 },
+	{ .name = "blitter",   .mmio = 0x22030 }
+};
+
+struct ring_sample {
+        uint32_t ccid_start;
+        uint32_t ccid_end;
+        uint32_t head, tail;
+};
+
+struct sample {
+	uint64_t timestamp;
+	struct ring_sample ring_samples[MAX_RINGS];
+	uint32_t instdone;
+	uint32_t instdone1;
+	uint64_t stats[STATS_COUNT];
+};
 
 static unsigned long
 gettime(void)
@@ -163,18 +211,20 @@ top_bits_sort(const void *a, const void *b)
 		return -1;
 }
 
-static void
-update_idle_bit(struct top_bit *top_bit)
+static int
+contexts_sort(const void *a, const void *b)
 {
-	uint32_t reg_val;
+	struct context * const * context_a = a;
+	struct context * const * context_b = b;
+	int a_samples = (*context_a)->n_samples;
+	int b_samples = (*context_b)->n_samples;
 
-	if (top_bit->bit->reg == INSTDONE_1)
-		reg_val = instdone1;
+	if (a_samples < b_samples)
+		return 1;
+	else if (a_samples == b_samples)
+		return 0;
 	else
-		reg_val = instdone;
-
-	if ((reg_val & top_bit->bit->bit) == 0)
-		top_bit->count++;
+		return -1;
 }
 
 static void
@@ -342,14 +392,6 @@ print_percentage_bar(float percent, int cur_line_len)
 	printf("%*s", PERCENTAGE_BAR_END - cur_line_len, "");
 }
 
-struct ring {
-	const char *name;
-	uint32_t mmio;
-	int head, tail, size;
-	uint64_t full;
-	int idle;
-};
-
 static uint32_t ring_read(struct ring *ring, uint32_t reg)
 {
 	return INREG(ring->mmio + reg);
@@ -360,72 +402,36 @@ static void ring_init(struct ring *ring)
 	ring->size = (((ring_read(ring, RING_CTL) & RING_NR_PAGES) >> 12) + 1) * 4096;
 }
 
-static void ring_reset(struct ring *ring)
-{
-	ring->idle = ring->full = 0;
-}
-
-static void ring_sample(struct ring *ring)
-{
-	int full;
-
-	if (!ring->size)
-		return;
-
-	ring->head = ring_read(ring, RING_HEAD) & HEAD_ADDR;
-	ring->tail = ring_read(ring, RING_TAIL) & TAIL_ADDR;
-
-	/* We sometimes read spurious, out of range pointers which
-	 * we want to ignore. We treat them as idle for now... */
-	if (ring->head > ring->size || ring->tail > ring->size)
-	{
-	    fprintf(stderr, "Ignoring spurious ring pointer\n");
-	    ring->idle++;
-	    return;
-	}
-
-	if (ring->tail == ring->head)
-		ring->idle++;
-
-	full = ring->tail - ring->head;
-	if (full < 0)
-		full += ring->size;
-	ring->full += full;
-}
-
 static void ring_print_header(FILE *out, struct ring *ring)
 {
-    fprintf(out, "%.6s%%\tops\t",
-            ring->name
-          );
+	fprintf(out, " %9s%% %6s", ring->name, "ops");
 }
 
-static void ring_print(struct ring *ring, unsigned long samples_per_sec)
+static void ring_print(struct ring *ring)
 {
 	int percent_busy, len;
 
 	if (!ring->size)
 		return;
 
-	percent_busy = 100 - 100 * ring->idle / samples_per_sec;
+	percent_busy = 100 - 100 * ring->idle / ring->n_samples;
 
 	len = printf("%25s busy: %3d%%: ", ring->name, percent_busy);
 	print_percentage_bar (percent_busy, len);
 	printf("%24s space: %d/%d\n",
-		   ring->name,
-		   (int)(ring->full / samples_per_sec),
-		   ring->size);
+	       ring->name,
+	       (int)(ring->full / ring->n_samples),
+	       ring->size);
 }
 
-static void ring_log(struct ring *ring, unsigned long samples_per_sec,
-		FILE *output)
+static void ring_log(struct ring *ring, FILE *output)
 {
 	if (ring->size)
-		fprintf(output, "%3d\t%d\t",
-			(int)(100 - 100 * ring->idle / samples_per_sec),
-			(int)(ring->full / samples_per_sec));
+		fprintf(output, " %10d %6d",
+			(int)(100 - 100 * ring->idle / ring->n_samples),
+			(int)(ring->full / ring->n_samples));
 	else
-		fprintf(output, "-1\t-1\t");
+		fprintf(output, " %10d %6d", -1, -1);
 }
 
 static void
@@ -448,23 +454,109 @@ usage(const char *appname)
 	return;
 }
 
+static int analyse_samples(uint32_t devid, struct sample *samples, int n_samples)
+{
+        int n_contexts = 0;
+        int i;
+
+        for (i = 0; i < MAX_CONTEXTS; i++)
+                contexts[i].n_samples = 0;
+
+        for (i = 0; i < n_samples; i++) {
+                struct sample *sample = samples + i;
+                uint32_t ccid = sample->ring_samples[RING_RENDER].ccid_start;
+                struct context *context = NULL;
+                int bad_render_ring_sample = 0;
+
+                for (int j = 0; j < num_instdone_bits; j++) {
+                        struct top_bit *top_bit = top_bits + j;
+                        uint32_t reg_val;
+
+                        if (top_bit->bit->reg == INSTDONE_1)
+                                reg_val = sample->instdone1;
+                        else
+                                reg_val = sample->instdone;
+
+                        if ((reg_val & top_bit->bit->bit) == 0)
+                                top_bit->count++;
+                }
+
+                for (int j = 0; j < MAX_RINGS; j++) {
+                        struct ring_sample *rs = sample->ring_samples + j;
+
+                        if (!rings[j].size)
+                                continue;
+
+                        /* We sometimes read spurious, out of range
+                         * pointers which we want to ignore... */
+                        if (rs->head < rings[j].size &&
+                            rs->tail < rings[j].size)
+                        {
+                                int32_t full = rs->tail - rs->head;
+
+                                full = rs->tail - rs->head;
+                                if (full < 0)
+                                        full += rings[j].size;
+                                rings[j].full += full;
+
+                                if (!full)
+                                        rings[j].idle++;
+
+                                rings[j].n_samples++;
+                        } else if (j == RING_RENDER)
+                                bad_render_ring_sample = 1;
+                }
+
+                /* Some of the stats are per render context so we
+                 * have bad data if the context changed while
+                 * sampling... */
+                if (bad_render_ring_sample ||
+                    ccid != sample->ring_samples[RING_RENDER].ccid_end)
+                        continue;
+
+                for (int j = 0; j < n_contexts; j++) {
+                        context = contexts + j;
+                        if (context->id == ccid)
+                                break;
+                }
+                if (n_contexts && context->id == ccid) {
+                        context->n_samples++;
+
+                        if (!HAS_STATS_REGS(devid))
+                                continue;
+
+                        for (int j = 0; j < STATS_COUNT; j++) {
+                                if (sample->stats[j] >= context->stats[j].end)
+                                        context->stats[j].end = sample->stats[j];
+                                else
+                                        context->stats[j].warped = 1;
+                        }
+                } else {
+                        if (n_contexts == MAX_CONTEXTS)
+                                continue;
+
+                        context = &contexts[n_contexts++];
+                        context->id = ccid;
+                        context->n_samples = 1;
+
+                        if (!HAS_STATS_REGS(devid))
+                                continue;
+
+                        for (int j = 0; j < STATS_COUNT; j++) {
+                                context->stats[j].start = sample->stats[j];
+                                context->stats[j].end = sample->stats[j];
+                                context->stats[j].warped = 0;
+                        }
+                }
+        }
+
+        return n_contexts;
+}
+
 int main(int argc, char **argv)
 {
 	uint32_t devid;
 	struct pci_device *pci_dev;
-	struct ring render_ring = {
-		.name = "render",
-		.mmio = 0x2030,
-	}, bsd_ring = {
-		.name = "bitstream",
-		.mmio = 0x4030,
-	}, bsd6_ring = {
-		.name = "bitstream",
-		.mmio = 0x12030,
-	}, blt_ring = {
-		.name = "blitter",
-		.mmio = 0x22030,
-	};
 	int i, ch;
 	int samples_per_sec = SAMPLES_PER_SEC;
 	FILE *output = NULL;
@@ -474,6 +566,7 @@ int main(int argc, char **argv)
 	int child_stat;
 	char *cmd=NULL;
 	int interactive=1;
+	struct sample *samples;
 
 	/* Parse options? */
 	while ((ch = getopt(argc, argv, "s:o:e:h")) != -1) {
@@ -511,6 +604,8 @@ int main(int argc, char **argv)
 			break;
 		}
 	}
+
+	samples = malloc(sizeof(struct sample) * samples_per_sec);
 
 	pci_dev = intel_get_pci_device();
 	devid = pci_dev->device_id;
@@ -551,35 +646,21 @@ int main(int argc, char **argv)
 		top_bits_sorted[i] = &top_bits[i];
 	}
 
+	for (i = 0; i < MAX_CONTEXTS; i++)
+		contexts_sorted[i] = &contexts[i];
+
 	/* Grab access to the registers */
 	intel_register_access_init(pci_dev, 0);
 
-	ring_init(&render_ring);
+	ring_init(&rings[RING_RENDER]);
 	if (IS_GEN4(devid) || IS_GEN5(devid))
-		ring_init(&bsd_ring);
+		ring_init(&rings[RING_BSD]);
 	if (IS_GEN6(devid) || IS_GEN7(devid)) {
-		ring_init(&bsd6_ring);
-		ring_init(&blt_ring);
-	}
-
-	/* Initialize GPU stats */
-	if (HAS_STATS_REGS(devid)) {
-		for (i = 0; i < STATS_COUNT; i++) {
-			uint32_t stats_high, stats_low, stats_high_2;
-
-			do {
-				stats_high = INREG(stats_regs[i] + 4);
-				stats_low = INREG(stats_regs[i]);
-				stats_high_2 = INREG(stats_regs[i] + 4);
-			} while (stats_high != stats_high_2);
-
-			last_stats[i] = (uint64_t)stats_high << 32 |
-				stats_low;
-		}
+		ring_init(&rings[RING_BSD6]);
+		ring_init(&rings[RING_BLIT]);
 	}
 
 	for (;;) {
-		int j;
 		unsigned long long t1, ti, tf, t2;
 		unsigned long long def_sleep = 1000000 / samples_per_sec;
 		unsigned long long last_samples_per_sec = samples_per_sec;
@@ -588,32 +669,63 @@ int main(int argc, char **argv)
 		char clear_screen[] = {0x1b, '[', 'H',
 				       0x1b, '[', 'J',
 				       0x0};
-		int percent;
 		int len;
+		int n_contexts;
 
 		t1 = gettime();
 
-		ring_reset(&render_ring);
-		ring_reset(&bsd_ring);
-		ring_reset(&bsd6_ring);
-		ring_reset(&blt_ring);
-
 		for (i = 0; i < samples_per_sec; i++) {
+			struct sample *sample = samples + i;
 			long long interval;
 			ti = gettime();
+
+			sample->timestamp = t1;
+
 			if (IS_965(devid)) {
-				instdone = INREG(INSTDONE_I965);
-				instdone1 = INREG(INSTDONE_1);
+				sample->instdone = INREG(INSTDONE_I965);
+				sample->instdone1 = INREG(INSTDONE_1);
 			} else
-				instdone = INREG(INSTDONE);
+				sample->instdone = INREG(INSTDONE);
 
-			for (j = 0; j < num_instdone_bits; j++)
-				update_idle_bit(&top_bits[j]);
+			for (int j = 0; j < MAX_RINGS; j++) {
+				struct ring_sample *rs;
 
-			ring_sample(&render_ring);
-			ring_sample(&bsd_ring);
-			ring_sample(&bsd6_ring);
-			ring_sample(&blt_ring);
+                                if (!rings[j].size)
+                                        continue;
+
+                                rs = sample->ring_samples + j;
+				rs->ccid_start =
+				    ring_read(rings + j, RING_CCID) & CCID_ADDR_MASK;
+				rs->head =
+				    ring_read(rings + j, RING_HEAD) & HEAD_ADDR;
+				rs->tail =
+				    ring_read(rings + j, RING_TAIL) & TAIL_ADDR;
+			}
+
+			if (HAS_STATS_REGS(devid)) {
+				for (int j = 0; j < STATS_COUNT; j++) {
+					uint32_t stats_high, stats_low, stats_high_2;
+
+					do {
+					    stats_high = INREG(stats_regs[j] + 4);
+					    stats_low = INREG(stats_regs[j]);
+					    stats_high_2 = INREG(stats_regs[j] + 4);
+					} while (stats_high != stats_high_2);
+
+					sample->stats[j] = (uint64_t)stats_high << 32 |
+					    stats_low;
+				}
+			}
+
+			for (int j = 0; j < MAX_RINGS; j++) {
+				struct ring_sample *rs = sample->ring_samples + j;
+
+                                if (!rings[j].size)
+                                        continue;
+
+				rs->ccid_end =
+				    ring_read(rings + j, RING_CCID) & CCID_ADDR_MASK;
+			}
 
 			tf = gettime();
 			if (tf - t1 >= 1000000) {
@@ -626,47 +738,58 @@ int main(int argc, char **argv)
 				usleep(interval);
 		}
 
-		if (HAS_STATS_REGS(devid)) {
-			for (i = 0; i < STATS_COUNT; i++) {
-				uint32_t stats_high, stats_low, stats_high_2;
+		for (i = 0; i < MAX_RINGS; i++) {
+			struct ring *ring = rings + i;
 
-				do {
-					stats_high = INREG(stats_regs[i] + 4);
-					stats_low = INREG(stats_regs[i]);
-					stats_high_2 = INREG(stats_regs[i] + 4);
-				} while (stats_high != stats_high_2);
+                        if (!ring->size)
+                                continue;
 
-				stats[i] = (uint64_t)stats_high << 32 |
-					stats_low;
-			}
+			ring->full = 0;
+			ring->idle = 0;
+			ring->n_samples = 0;
 		}
+		for (i = 0; i < num_instdone_bits; i++)
+			top_bits[i].count = 0;
+
+                n_contexts = analyse_samples(devid, samples, last_samples_per_sec);
+                if (!n_contexts) {
+                        fprintf(stderr, "Not able to distinguish even one "
+                                "context in samples!");
+                        exit(1);
+                }
 
 		qsort(top_bits_sorted, num_instdone_bits,
 		      sizeof(struct top_bit *), top_bits_sort);
+		qsort(contexts_sorted, MAX_CONTEXTS,
+		      sizeof(struct context *), contexts_sort);
 
 		/* Limit the number of lines printed to the terminal height so the
 		 * most important info (at the top) will stay on screen. */
 		max_lines = -1;
 		if (ioctl(0, TIOCGWINSZ, &ws) != -1)
 			max_lines = ws.ws_row - 6; /* exclude header lines */
-		if (max_lines >= num_instdone_bits)
-			max_lines = num_instdone_bits;
 
 		t2 = gettime();
 		elapsed_time += (t2 - t1) / 1000000.0;
 
 		if (interactive) {
+			int ctx_i = 0;
+			int stat_i = -1; /* account for context header */
+			int percent;
+
 			printf("%s", clear_screen);
 			print_clock_info(pci_dev);
 
-			ring_print(&render_ring, last_samples_per_sec);
-			ring_print(&bsd_ring, last_samples_per_sec);
-			ring_print(&bsd6_ring, last_samples_per_sec);
-			ring_print(&blt_ring, last_samples_per_sec);
+			for (i = 0; i < MAX_RINGS; i++) {
+                                if (!rings[i].size)
+                                        continue;
+				ring_print(rings + i);
+                        }
 
 			printf("\n%30s  %s\n", "task", "percent busy");
 			for (i = 0; i < max_lines; i++) {
-				if (top_bits_sorted[i]->count > 0) {
+				if (i < num_instdone_bits &&
+				    top_bits_sorted[i]->count > 0) {
 					percent = (top_bits_sorted[i]->count * 100) /
 						last_samples_per_sec;
 					len = printf("%30s: %3d%%: ",
@@ -677,14 +800,32 @@ int main(int argc, char **argv)
 					printf("%*s", PERCENTAGE_BAR_END, "");
 				}
 
-				if (i < STATS_COUNT && HAS_STATS_REGS(devid)) {
-					printf("%13s: %llu (%lld/sec)",
-						   stats_reg_names[i],
-						   (long long)stats[i],
-						   (long long)(stats[i] - last_stats[i]));
-					last_stats[i] = stats[i];
+				if (ctx_i < n_contexts && HAS_STATS_REGS(devid)) {
+					struct context *context = contexts_sorted[ctx_i];
+
+					if (stat_i == -1) {
+						percent = (context->n_samples * 100) /
+							last_samples_per_sec;
+						printf("context = %" PRIx32 " : %d%% active",
+						       context->id, percent);
+					} else if (!context->stats[stat_i].warped) {
+						printf("   %-15s: %" PRIu64 " (%" PRIu64 "/sec)",
+						       stats_reg_names[stat_i],
+						       context->stats[stat_i].end,
+						       (context->stats[stat_i].end -
+							context->stats[stat_i].start));
+					} else {
+						printf("   %-15s: %" PRIu64 " (Time Warp Error)",
+						       stats_reg_names[stat_i],
+						       context->stats[stat_i].end);
+					}
+					if (++stat_i == STATS_COUNT) {
+					    ctx_i++;
+					    stat_i = -1;
+					}
 				} else {
-					if (!top_bits_sorted[i]->count)
+					if (i >= num_instdone_bits ||
+					    !top_bits_sorted[i]->count)
 						break;
 				}
 				printf("\n");
@@ -693,49 +834,48 @@ int main(int argc, char **argv)
 		if (output) {
 			/* Print headers for columns at first run */
 			if (print_headers) {
-				fprintf(output, "# time\t");
-				ring_print_header(output, &render_ring);
-				ring_print_header(output, &bsd_ring);
-				ring_print_header(output, &bsd6_ring);
-				ring_print_header(output, &blt_ring);
-				for (i = 0; i < MAX_NUM_TOP_BITS; i++) {
-					if (i < STATS_COUNT && HAS_STATS_REGS(devid)) {
-						fprintf(output, "%.6s\t",
-							   stats_reg_names[i]
-							   );
-					}
-					if (!top_bits[i].count)
-						continue;
+				fprintf(output, "#%15s %10s", "time", "context");
+				for (i = 0; i < MAX_RINGS; i++) {
+                                        if (!rings[i].size)
+                                                continue;
+					ring_print_header(output, &rings[i]);
+                                }
+				for (i = 0; i < STATS_COUNT; i++) {
+					fprintf(output, " %15s", stats_reg_names[i]);
 				}
 				fprintf(output, "\n");
 				print_headers = 0;
 			}
 
 			/* Print statistics */
-			fprintf(output, "%.2f\t", elapsed_time);
-			ring_log(&render_ring, last_samples_per_sec, output);
-			ring_log(&bsd_ring, last_samples_per_sec, output);
-			ring_log(&bsd6_ring, last_samples_per_sec, output);
-			ring_log(&blt_ring, last_samples_per_sec, output);
+			fprintf(output, " %15.2f %10s", elapsed_time, "");
 
-			for (i = 0; i < MAX_NUM_TOP_BITS; i++) {
-				if (i < STATS_COUNT && HAS_STATS_REGS(devid)) {
-					fprintf(output, "%lu\t",
-						   stats[i] - last_stats[i]);
-					last_stats[i] = stats[i];
+			for (i = 0; i < MAX_RINGS; i++) {
+                                if (!rings[i].size)
+                                        continue;
+				ring_log(&rings[i], output);
+                        }
+			fprintf(output, "\n");
+			for (i = 0; i < n_contexts; i++) {
+				struct context *context = contexts_sorted[i];
+
+				fprintf(output, " %15s %10" PRIx32, "", context->id);
+
+				for (int j = 0; j < MAX_RINGS; j++) {
+                                        if (!rings[i].size)
+                                                continue;
+					fprintf(output, " %10s %6s", "", "");
+                                }
+
+				for (int j = 0; j < STATS_COUNT; j++) {
+					fprintf(output, " %15" PRIu64,
+						(context->stats[j].end -
+						 context->stats[j].start));
 				}
-					if (!top_bits[i].count)
-						continue;
+				fprintf(output, "\n");
 			}
 			fprintf(output, "\n");
 			fflush(output);
-		}
-
-		for (i = 0; i < num_instdone_bits; i++) {
-			top_bits_sorted[i]->count = 0;
-
-			if (i < STATS_COUNT)
-				last_stats[i] = stats[i];
 		}
 
 		/* Check if child has gone */
