@@ -357,7 +357,7 @@ static uint32_t ring_read(struct ring *ring, uint32_t reg)
 
 static void ring_init(struct ring *ring)
 {
-	ring->size = (((ring_read(ring, RING_LEN) & RING_NR_PAGES) >> 12) + 1) * 4096;
+	ring->size = (((ring_read(ring, RING_CTL) & RING_NR_PAGES) >> 12) + 1) * 4096;
 }
 
 static void ring_reset(struct ring *ring)
