@@ -711,7 +711,8 @@ int main(int argc, char **argv)
 		}
 	}
 
-	fclose(output);
+        if (output)
+                fclose(output);
 
 	intel_register_access_fini();
 	return 0;
