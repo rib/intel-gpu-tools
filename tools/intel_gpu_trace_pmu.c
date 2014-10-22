@@ -725,7 +725,7 @@ open_i915_oa_event(uint64_t report_format,
                                           const struct perf_event_header *header))
 {
         struct perf_event_attr attr;
-        unsigned int mmap_size = 32 * page_size; /* NB: must be power of two */
+        unsigned int mmap_size = 16 * 1024 * 1024; /* NB: must be power of two */
         int event_fd;
         void *mmap_base;
         struct perf_event_mmap_page *mmap_page;
