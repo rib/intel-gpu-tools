@@ -195,6 +195,7 @@ TESTS_progs = \
 	kms_pwrite_crc \
 	kms_sink_crc_basic \
 	prime_udl \
+	perf \
 	$(NULL)
 
 # IMPORTANT: The ZZ_ tests need to be run last!
