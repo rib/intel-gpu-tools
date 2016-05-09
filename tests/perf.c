@@ -130,6 +130,8 @@ static uint32_t devid;
 static int device;
 
 static uint64_t hsw_render_basic_id = UINT64_MAX;
+static uint64_t bdw_render_basic_id = UINT64_MAX;
+
 static uint64_t gt_min_freq_mhz_saved = 0;
 static uint64_t gt_max_freq_mhz_saved = 0;
 static uint64_t gt_min_freq_mhz = 0;
@@ -275,6 +277,18 @@ read_debugfs_u64_record(const char *file, const char *key)
         free(str_val);
 
         return val;
+}
+
+static bool
+lookup_bdw_render_basic_id(void)
+{
+        char buf[256];
+
+        snprintf(buf, sizeof(buf),
+                 "/sys/class/drm/card%d/metrics/b541bd57-0e0f-4154-b4c0-5858010a2bf7/id",
+                 device);
+
+        return try_read_u64_file(buf, &bdw_render_basic_id);
 }
 
 static bool
