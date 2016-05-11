@@ -125,6 +125,11 @@ static bool hsw_undefined_a_counters[45] = {
         [44] = true,
 };
 
+static struct {
+	uint64_t i915_oa_format;
+	uint64_t render_basic_id;
+}perf;
+
 static int drm_fd;
 static uint32_t devid;
 static int device;
@@ -301,6 +306,18 @@ lookup_hsw_render_basic_id(void)
                  device);
 
         return try_read_u64_file(buf, &hsw_render_basic_id);
+}
+
+static void
+init_perf_test(void)
+{
+	if (IS_HASWELL(devid)) {
+		perf.render_basic_id = hsw_render_basic_id;
+		perf.i915_oa_format = I915_OA_FORMAT_A45_B8_C8;
+	} else {
+		perf.render_basic_id = bdw_render_basic_id;
+		perf.i915_oa_format = I915_OA_FORMAT_A32u40_A4u32_B8_C8;
+	}
 }
 
 static void
@@ -2006,6 +2023,7 @@ igt_main
                 ret = stat("/proc/sys/dev/i915/oa_min_timer_exponent", &sb);
                 igt_require(ret == 0);
 
+                init_perf_test();
                 gt_frequency_range_save();
 
                 write_u64_file("/proc/sys/dev/i915/perf_stream_paranoid", 1);
