@@ -375,7 +375,7 @@ test_system_wide_paranoid(void)
 
                         /* OA unit configuration */
                         DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                        DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                        DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                         DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
                 };
                 struct drm_i915_perf_open_param param = {
@@ -401,7 +401,7 @@ test_system_wide_paranoid(void)
 
                         /* OA unit configuration */
                         DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                        DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                        DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                         DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
                 };
                 struct drm_i915_perf_open_param param = {
@@ -435,7 +435,7 @@ test_invalid_open_flags(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                 DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
         };
         struct drm_i915_perf_open_param param = {
@@ -455,7 +455,7 @@ test_invalid_oa_metric_set_id(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                 DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, UINT64_MAX,
         };
@@ -508,7 +508,7 @@ test_invalid_oa_format_id(void)
         do_ioctl_err(drm_fd, DRM_IOCTL_I915_PERF_OPEN, &param, EINVAL);
 
         /* Check that we aren't just seeing false positives... */
-        properties[7] = I915_OA_FORMAT_A45_B8_C8;
+        properties[7] = perf.i915_oa_format;
         stream_fd = __perf_open(drm_fd, &param);
         close(stream_fd);
 
@@ -526,7 +526,7 @@ test_missing_sample_flags(void)
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
         };
         struct drm_i915_perf_open_param param = {
                 .flags = I915_PERF_FLAG_FD_CLOEXEC,
@@ -840,7 +840,7 @@ test_oa_exponents(int gt_freq_mhz)
                         igt_debug("ITER %d: testing OA exponent %d with GT freq = %dmhz\n",
                                   j, i, gt_freq_mhz);
 
-                        open_and_read_2_oa_reports(I915_OA_FORMAT_A45_B8_C8, 256,
+                        open_and_read_2_oa_reports(perf.i915_oa_format, 256,
                                                    i, /* exponent */
                                                    oa_report0,
                                                    oa_report1,
@@ -903,7 +903,7 @@ test_invalid_oa_exponent(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                 DRM_I915_PERF_PROP_OA_EXPONENT, 31, /* maximum exponent expected
                                                        to be accepted */
         };
@@ -936,7 +936,7 @@ test_low_oa_exponent_permissions(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                 DRM_I915_PERF_PROP_OA_EXPONENT, min_exponent - 1,
         };
         struct drm_i915_perf_open_param param = {
@@ -988,7 +988,7 @@ test_per_context_mode_unprivileged(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                 DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
         };
         struct drm_i915_perf_open_param param = {
@@ -1066,7 +1066,7 @@ test_blocking(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
         struct drm_i915_perf_open_param param = {
@@ -1158,7 +1158,7 @@ test_polling(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
         struct drm_i915_perf_open_param param = {
@@ -1273,7 +1273,7 @@ test_buffer_fill(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
         struct drm_i915_perf_open_param param = {
@@ -1347,7 +1347,7 @@ test_enable_disable(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
         struct drm_i915_perf_open_param param = {
@@ -1418,7 +1418,7 @@ test_short_reads(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
         struct drm_i915_perf_open_param param = {
@@ -1485,7 +1485,7 @@ test_non_sampling_read_error(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
 
                 /* XXX: no sampling exponent */
         };
@@ -1519,7 +1519,7 @@ test_disabled_read_error(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
         struct drm_i915_perf_open_param param = {
@@ -1546,7 +1546,7 @@ test_disabled_read_error(void)
         stream_fd = __perf_open(drm_fd, &param);
 
         read_2_oa_reports(stream_fd,
-                          I915_OA_FORMAT_A45_B8_C8, 256,
+                          perf.i915_oa_format, 256,
                           oa_exponent,
                           oa_report0,
                           oa_report1,
@@ -1561,7 +1561,7 @@ test_disabled_read_error(void)
         do_ioctl(stream_fd, I915_PERF_IOCTL_ENABLE, 0);
 
         read_2_oa_reports(stream_fd,
-                          I915_OA_FORMAT_A45_B8_C8, 256,
+                          perf.i915_oa_format, 256,
                           oa_exponent,
                           oa_report0,
                           oa_report1,
@@ -1587,7 +1587,7 @@ test_mi_rpc(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
 
                 /* Note: no OA exponent specified in this case */
         };
@@ -1712,7 +1712,7 @@ test_per_ctx_mi_rpc(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
 
                 /* Note: no OA exponent specified in this case */
         };
@@ -1826,7 +1826,7 @@ test_per_ctx_mi_rpc(void)
                 igt_assert_neq(report1_32[1], 0); /* timestamp */
 
                 print_reports(report0_32, report1_32,
-                              lookup_format(I915_OA_FORMAT_A45_B8_C8));
+                              lookup_format(perf.i915_oa_format));
 
                 /* A40 == N samples written to all render targets */
                 n_samples_written_baseline = report1_32[43] - report0_32[43];
@@ -1876,7 +1876,7 @@ test_rc6_disable(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
         struct drm_i915_perf_open_param param = {
@@ -1950,7 +1950,7 @@ test_i915_ref_count(void)
 
                 /* OA unit configuration */
                 DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
-                DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
+                DRM_I915_PERF_PROP_OA_FORMAT, perf.i915_oa_format,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
         struct drm_i915_perf_open_param param = {
@@ -1984,7 +1984,7 @@ test_i915_ref_count(void)
         igt_assert(ref_count0 > baseline);
 
         read_2_oa_reports(stream_fd,
-                          I915_OA_FORMAT_A45_B8_C8, 256,
+                          perf.i915_oa_format, 256,
                           oa_exponent,
                           oa_report0,
                           oa_report1,
