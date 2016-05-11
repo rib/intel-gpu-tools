@@ -134,9 +134,6 @@ static int drm_fd;
 static uint32_t devid;
 static int device;
 
-static uint64_t hsw_render_basic_id = UINT64_MAX;
-static uint64_t bdw_render_basic_id = UINT64_MAX;
-
 static uint64_t gt_min_freq_mhz_saved = 0;
 static uint64_t gt_max_freq_mhz_saved = 0;
 static uint64_t gt_min_freq_mhz = 0;
@@ -293,7 +290,7 @@ lookup_bdw_render_basic_id(void)
                  "/sys/class/drm/card%d/metrics/b541bd57-0e0f-4154-b4c0-5858010a2bf7/id",
                  device);
 
-        return try_read_u64_file(buf, &bdw_render_basic_id);
+        return try_read_u64_file(buf, &perf.render_basic_id);
 }
 
 static bool
@@ -305,17 +302,15 @@ lookup_hsw_render_basic_id(void)
                  "/sys/class/drm/card%d/metrics/403d8832-1a27-4aa6-a64e-f5389ce7b212/id",
                  device);
 
-        return try_read_u64_file(buf, &hsw_render_basic_id);
+        return try_read_u64_file(buf, &perf.render_basic_id);
 }
 
 static void
 init_perf_test(void)
 {
 	if (IS_HASWELL(devid)) {
-		perf.render_basic_id = hsw_render_basic_id;
 		perf.i915_oa_format = I915_OA_FORMAT_A45_B8_C8;
 	} else {
-		perf.render_basic_id = bdw_render_basic_id;
 		perf.i915_oa_format = I915_OA_FORMAT_A32u40_A4u32_B8_C8;
 	}
 }
@@ -379,7 +374,7 @@ test_system_wide_paranoid(void)
                         DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                         /* OA unit configuration */
-                        DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                        DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                         DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
                         DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
                 };
@@ -405,7 +400,7 @@ test_system_wide_paranoid(void)
                         DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                         /* OA unit configuration */
-                        DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                        DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                         DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
                         DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
                 };
@@ -439,7 +434,7 @@ test_invalid_open_flags(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
                 DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
         };
@@ -478,7 +473,7 @@ test_invalid_oa_metric_set_id(void)
         do_ioctl_err(drm_fd, DRM_IOCTL_I915_PERF_OPEN, &param, EINVAL);
 
         /* Check that we aren't just seeing false positives... */
-        properties[7] = hsw_render_basic_id;
+        properties[7] = perf.render_basic_id;
         stream_fd = __perf_open(drm_fd, &param);
         close(stream_fd);
 
@@ -495,7 +490,7 @@ test_invalid_oa_format_id(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
                 DRM_I915_PERF_PROP_OA_FORMAT, UINT64_MAX,
         };
@@ -529,7 +524,7 @@ test_missing_sample_flags(void)
                 /* No _PROP_SAMPLE_xyz flags */
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
         };
@@ -636,7 +631,7 @@ open_and_read_2_oa_reports(uint64_t format_id,
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, format_id,
                 DRM_I915_PERF_PROP_OA_EXPONENT, exponent,
 
@@ -907,7 +902,7 @@ test_invalid_oa_exponent(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
                 DRM_I915_PERF_PROP_OA_EXPONENT, 31, /* maximum exponent expected
                                                        to be accepted */
@@ -940,7 +935,7 @@ test_low_oa_exponent_permissions(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
                 DRM_I915_PERF_PROP_OA_EXPONENT, min_exponent - 1,
         };
@@ -992,7 +987,7 @@ test_per_context_mode_unprivileged(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
                 DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
         };
@@ -1070,7 +1065,7 @@ test_blocking(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
@@ -1162,7 +1157,7 @@ test_polling(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
@@ -1277,7 +1272,7 @@ test_buffer_fill(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
@@ -1351,7 +1346,7 @@ test_enable_disable(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
@@ -1422,7 +1417,7 @@ test_short_reads(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
@@ -1489,7 +1484,7 @@ test_non_sampling_read_error(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 
                 /* XXX: no sampling exponent */
@@ -1523,7 +1518,7 @@ test_disabled_read_error(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
@@ -1591,7 +1586,7 @@ test_mi_rpc(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 
                 /* Note: no OA exponent specified in this case */
@@ -1716,7 +1711,7 @@ test_per_ctx_mi_rpc(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 
                 /* Note: no OA exponent specified in this case */
@@ -1880,7 +1875,7 @@ test_rc6_disable(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
@@ -1954,7 +1949,7 @@ test_i915_ref_count(void)
                 DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
                 /* OA unit configuration */
-                DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+                DRM_I915_PERF_PROP_OA_METRICS_SET, perf.render_basic_id,
                 DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
                 DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
         };
