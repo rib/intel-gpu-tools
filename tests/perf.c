@@ -71,18 +71,22 @@ IGT_TEST_DESCRIPTION("Test the i915 perf metrics streaming interface");
 #define PIPE_CONTROL_PPGTT_WRITE        (0 << 2)
 #define PIPE_CONTROL_GLOBAL_GTT_WRITE   (1 << 2)
 
-static struct {
+typedef struct {
         const char *name;
         uint64_t id;
         size_t size;
         int a_off; /* bytes */
+        int a4_off;
         int n_a;
+        int n_a4;
         int first_a;
         int b_off;
         int n_b;
         int c_off;
         int n_c;
-} hsw_oa_formats[] = {
+} oa_format;
+
+static oa_format hsw_oa_formats[] = {
         { "A13", I915_OA_FORMAT_A13, .size = 64,
                 .a_off = 12, .n_a = 13 },
         { "A29", I915_OA_FORMAT_A29, .size = 128,
@@ -105,6 +109,23 @@ static struct {
         { "C4_B8", I915_OA_FORMAT_C4_B8, .size = 64,
                 .c_off = 16, .n_c = 4,
                 .b_off = 28, .n_b = 8 },
+};
+
+static oa_format bdw_oa_formats[] = {
+       { "A12", I915_OA_FORMAT_A12, .size = 64,
+                .a_off = 12, .n_a = 12 , .first_a = 7},
+       { "A12_B8_C8", I915_OA_FORMAT_A12_B8_C8, .size = 128,
+                .a_off = 12, .n_a = 12,
+                .b_off = 64, .n_b = 8,
+                .c_off = 96, .n_c = 8, .first_a = 7},
+        { "A32u40_A4u32_B8_C8", I915_OA_FORMAT_A32u40_A4u32_B8_C8, .size = 256,
+                .a_off = 16, .n_a = 36,
+                .a4_off = 160, .n_a4 = 32,
+                .b_off = 192, .n_b = 8,
+                .c_off = 224, .n_c = 8 },
+        { "C4_B8", I915_OA_FORMAT_C4_B8, .size = 64,
+                .c_off = 16,  .n_c = 4,
+                .b_off = 28, .n_b = 8},
 };
 
 static bool hsw_undefined_a_counters[45] = {
