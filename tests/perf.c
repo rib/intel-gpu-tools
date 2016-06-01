@@ -156,6 +156,8 @@ static struct {
 	uint64_t oa_formats_size;
 	oa_format *oa_formats;
 	bool *undefined_a_counters;
+
+	uint32_t (*get_clock_delta) (uint32_t *oa_report0,uint32_t *oa_report1,int index);
 }perf;
 
 static int drm_fd;
@@ -379,6 +381,49 @@ gt_frequency_range_restore(void)
 
         gt_min_freq_mhz = gt_min_freq_mhz_saved;
         gt_max_freq_mhz = gt_max_freq_mhz_saved;
+}
+
+static uint32_t
+bdw_get_clock_delta (uint32_t *oa_report0,uint32_t *oa_report1,int index) {
+uint32_t clock_delta;
+
+        clock_delta=oa_report1[3] - oa_report0[3];
+        igt_assert_neq(clock_delta, 0);
+        igt_debug("CLOCK: 1st = %"PRIu32", 2nd = %"PRIu32", delta = %"PRIu32"\n",oa_report0[3], oa_report1[3], clock_delta);
+
+        return clock_delta;
+}
+
+static uint32_t
+hsw_get_clock_delta (uint32_t *oa_report0,uint32_t *oa_report1,int index) {
+
+uint32_t clock_delta;
+uint32_t *c0, *c1;
+
+        /* C2 corresponds to a clock counter for this metric set but
+        * it's not included in all of the formats. */
+        if (perf.oa_formats[index].n_c) {
+
+                c0 = (uint32_t *)(((uint8_t *)oa_report0) + perf.oa_formats[index].c_off);
+                c1 = (uint32_t *)(((uint8_t *)oa_report1) + perf.oa_formats[index].c_off);
+
+                /* The first report might have a clock count of zero
+                * but we wouldn't expect that in the second report... */
+                igt_assert_neq(c1[2], 0);
+
+                clock_delta = c1[2] - c0[2];
+                igt_assert_neq(clock_delta, 0);
+                igt_debug("CLOCK: 1st = %"PRIu32", 2nd = %"PRIu32", delta = %"PRIu32"\n",
+                          c0[2], c1[2], clock_delta);
+        } else {
+                /* Assume running at max freq for sake of
+                * below sanity check on counters... */
+                clock_delta = (gt_max_freq_mhz *
+                                       (uint64_t)(oa_report1[1]-oa_report0[1])) / 1000;
+                igt_debug("CLOCK = N/A\n");
+        }
+
+        return clock_delta;
 }
 
 /* CAP_SYS_ADMIN is required to open system wide metrics, unless the system
@@ -686,12 +731,7 @@ print_reports(uint32_t *oa_report0, uint32_t *oa_report1, int fmt)
 
         igt_debug("TIMESTAMP: 1st = %"PRIu32", 2nd = %"PRIu32", delta = %"PRIu32"\n",
                   oa_report0[1], oa_report1[1], oa_report1[1] - oa_report0[1]);
-
-        if (perf.oa_formats[fmt].n_c) {
-                igt_debug("CLOCK: 1st = %"PRIu32", 2nd = %"PRIu32", delta = %"PRIu32"\n",
-                          c0[2], c1[2], c1[2] - c0[2]);
-        } else
-                igt_debug("CLOCK = N/A\n");
+        perf.get_clock_delta(oa_report0,oa_report1,fmt);
 
         for (int j = perf.oa_formats[fmt].first_a;
              j < perf.oa_formats[fmt].n_a;
@@ -732,6 +772,7 @@ test_oa_formats(void)
                 uint32_t time_delta;
                 uint32_t clock_delta;
                 uint32_t max_delta;
+		uint64_t freq;
 
                 igt_debug("Checking OA format %s\n", perf.oa_formats[i].name);
 
@@ -758,33 +799,14 @@ test_oa_formats(void)
                 time_delta = (oa_report1[1] - oa_report0[1]) * 80;
                 igt_assert_neq(time_delta, 0);
 
-                /* C2 corresponds to a clock counter for this metric set but
-                 * it's not included in all of the formats. */
-                if (perf.oa_formats[i].n_c) {
-                        uint64_t freq;
+		clock_delta = perf.get_clock_delta(oa_report0,oa_report1,i);
+		freq = ((uint64_t)clock_delta * 1000) / time_delta;
+		igt_debug("freq = %"PRIu64"\n", freq);
+		igt_assert(freq <= gt_max_freq_mhz);
+		igt_debug("clock delta = %"PRIu32"\n", clock_delta);
 
-                        /* The first report might have a clock count of zero
-                         * but we wouldn't expect that in the second report... */
-                        igt_assert_neq(c1[2], 0);
-
-                        clock_delta = c1[2] - c0[2];
-                        igt_assert_neq(clock_delta, 0);
-
-                        freq = ((uint64_t)clock_delta * 1000) / time_delta;
-                        igt_debug("freq = %"PRIu64"\n", freq);
-
-                        igt_assert(freq <= gt_max_freq_mhz);
-                } else {
-                        /* Assume running at max freq for sake of
-                         * below sanity check on counters... */
-                        clock_delta = (gt_max_freq_mhz *
-                                       (uint64_t)time_delta) / 1000;
-                }
-
-                igt_debug("clock delta = %"PRIu32"\n", clock_delta);
-
-                /* The maximum rate for any HSW counter = 
-                 *   clock_delta * 40 EUs
+		/*The maximum rate for any HSW counter =
+		 *   clock_delta * 40 EUs
                  *
                  * Sanity check that no counters exceed this delta.
                  */
@@ -2023,12 +2045,16 @@ init_perf_test(void)
                 perf.i915_oa_format = I915_OA_FORMAT_A45_B8_C8;
                 perf.oa_formats=hsw_oa_formats;
                 perf.oa_formats_size=ARRAY_SIZE(hsw_oa_formats);
-		perf.undefined_a_counters = hsw_undefined_a_counters;
+                perf.undefined_a_counters = hsw_undefined_a_counters;
+
+                perf.get_clock_delta=hsw_get_clock_delta;
         } else {
                 perf.i915_oa_format = I915_OA_FORMAT_A32u40_A4u32_B8_C8;
                 perf.oa_formats=bdw_oa_formats;
                 perf.oa_formats_size=ARRAY_SIZE(bdw_oa_formats);
-		perf.undefined_a_counters = bdw_undefined_a_counters;
+                perf.undefined_a_counters = bdw_undefined_a_counters;
+
+                perf.get_clock_delta=bdw_get_clock_delta;
         }
 }
 
