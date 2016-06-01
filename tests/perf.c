@@ -146,9 +146,16 @@ static bool hsw_undefined_a_counters[45] = {
         [44] = true,
 };
 
+static bool bdw_undefined_a_counters[36] = {
+       [32] = true,
+};
+
 static struct {
 	uint64_t i915_oa_format;
 	uint64_t render_basic_id;
+	uint64_t oa_formats_size;
+	oa_format *oa_formats;
+	bool *undefined_a_counters;
 }perf;
 
 static int drm_fd;
@@ -176,8 +183,8 @@ __perf_open(int fd, struct drm_i915_perf_open_param *param)
 static int
 lookup_format(int i915_perf_fmt_id)
 {
-        for (int i = 0; i < ARRAY_SIZE(hsw_oa_formats); i++)
-                if (hsw_oa_formats[i].id == i915_perf_fmt_id)
+        for (int i = 0; i < perf.oa_formats_size; i++)
+                if (perf.oa_formats[i].id == i915_perf_fmt_id)
                         return i;
 
         igt_assert(!"reached");
@@ -324,16 +331,6 @@ lookup_hsw_render_basic_id(void)
                  device);
 
         return try_read_u64_file(buf, &perf.render_basic_id);
-}
-
-static void
-init_perf_test(void)
-{
-	if (IS_HASWELL(devid)) {
-		perf.i915_oa_format = I915_OA_FORMAT_A45_B8_C8;
-	} else {
-		perf.i915_oa_format = I915_OA_FORMAT_A32u40_A4u32_B8_C8;
-	}
 }
 
 static void
@@ -679,43 +676,43 @@ print_reports(uint32_t *oa_report0, uint32_t *oa_report1, int fmt)
         /* Not ideal naming here with a0 or a1
          * differentiating report0 or 1 not A counter 0 or 1....
          */
-        a0 = (uint32_t *)(((uint8_t *)oa_report0) + hsw_oa_formats[fmt].a_off);
-        b0 = (uint32_t *)(((uint8_t *)oa_report0) + hsw_oa_formats[fmt].b_off);
-        c0 = (uint32_t *)(((uint8_t *)oa_report0) + hsw_oa_formats[fmt].c_off);
+        a0 = (uint32_t *)(((uint8_t *)oa_report0) + perf.oa_formats[fmt].a_off);
+        b0 = (uint32_t *)(((uint8_t *)oa_report0) + perf.oa_formats[fmt].b_off);
+        c0 = (uint32_t *)(((uint8_t *)oa_report0) + perf.oa_formats[fmt].c_off);
 
-        a1 = (uint32_t *)(((uint8_t *)oa_report1) + hsw_oa_formats[fmt].a_off);
-        b1 = (uint32_t *)(((uint8_t *)oa_report1) + hsw_oa_formats[fmt].b_off);
-        c1 = (uint32_t *)(((uint8_t *)oa_report1) + hsw_oa_formats[fmt].c_off);
+        a1 = (uint32_t *)(((uint8_t *)oa_report1) + perf.oa_formats[fmt].a_off);
+        b1 = (uint32_t *)(((uint8_t *)oa_report1) + perf.oa_formats[fmt].b_off);
+        c1 = (uint32_t *)(((uint8_t *)oa_report1) + perf.oa_formats[fmt].c_off);
 
         igt_debug("TIMESTAMP: 1st = %"PRIu32", 2nd = %"PRIu32", delta = %"PRIu32"\n",
                   oa_report0[1], oa_report1[1], oa_report1[1] - oa_report0[1]);
 
-        if (hsw_oa_formats[fmt].n_c) {
+        if (perf.oa_formats[fmt].n_c) {
                 igt_debug("CLOCK: 1st = %"PRIu32", 2nd = %"PRIu32", delta = %"PRIu32"\n",
                           c0[2], c1[2], c1[2] - c0[2]);
         } else
                 igt_debug("CLOCK = N/A\n");
 
-        for (int j = hsw_oa_formats[fmt].first_a;
-             j < hsw_oa_formats[fmt].n_a;
+        for (int j = perf.oa_formats[fmt].first_a;
+             j < perf.oa_formats[fmt].n_a;
              j++)
         {
                 uint32_t delta = a1[j] - a0[j];
 
-                if (hsw_undefined_a_counters[j])
+                if (perf.undefined_a_counters[j])
                         continue;
 
                 igt_debug("A%d: 1st = %"PRIu32", 2nd = %"PRIu32", delta = %"PRIu32"\n",
                           j, a0[j], a1[j], delta);
         }
 
-        for (int j = 0; j < hsw_oa_formats[fmt].n_b; j++) {
+        for (int j = 0; j < perf.oa_formats[fmt].n_b; j++) {
                 uint32_t delta = b1[j] - b0[j];
                 igt_debug("B%d: 1st = %"PRIu32", 2nd = %"PRIu32", delta = %"PRIu32"\n",
                           j, b0[j], b1[j], delta);
         }
 
-        for (int j = 0; j < hsw_oa_formats[fmt].n_c; j++) {
+        for (int j = 0; j < perf.oa_formats[fmt].n_c; j++) {
                 uint32_t delta = c1[j] - c0[j];
                 igt_debug("C%d: 1st = %"PRIu32", 2nd = %"PRIu32", delta = %"PRIu32"\n",
                           j, c0[j], c1[j], delta);
@@ -727,7 +724,7 @@ test_oa_formats(void)
 {
         int oa_exponent = 13;
 
-        for (int i = 0; i < ARRAY_SIZE(hsw_oa_formats); i++) {
+        for (int i = 0; i < perf.oa_formats_size; i++) {
                 uint32_t oa_report0[64];
                 uint32_t oa_report1[64];
                 uint32_t *a0, *b0, *c0;
@@ -736,10 +733,10 @@ test_oa_formats(void)
                 uint32_t clock_delta;
                 uint32_t max_delta;
 
-                igt_debug("Checking OA format %s\n", hsw_oa_formats[i].name);
+                igt_debug("Checking OA format %s\n", perf.oa_formats[i].name);
 
-                open_and_read_2_oa_reports(hsw_oa_formats[i].id,
-                                           hsw_oa_formats[i].size,
+                open_and_read_2_oa_reports(perf.oa_formats[i].id,
+                                           perf.oa_formats[i].size,
                                            oa_exponent,
                                            oa_report0,
                                            oa_report1,
@@ -747,13 +744,13 @@ test_oa_formats(void)
 
                 print_reports(oa_report0, oa_report1, i);
 
-                a0 = (uint32_t *)(((uint8_t *)oa_report0) + hsw_oa_formats[i].a_off);
-                b0 = (uint32_t *)(((uint8_t *)oa_report0) + hsw_oa_formats[i].b_off);
-                c0 = (uint32_t *)(((uint8_t *)oa_report0) + hsw_oa_formats[i].c_off);
+                a0 = (uint32_t *)(((uint8_t *)oa_report0) + perf.oa_formats[i].a_off);
+                b0 = (uint32_t *)(((uint8_t *)oa_report0) + perf.oa_formats[i].b_off);
+                c0 = (uint32_t *)(((uint8_t *)oa_report0) + perf.oa_formats[i].c_off);
 
-                a1 = (uint32_t *)(((uint8_t *)oa_report1) + hsw_oa_formats[i].a_off);
-                b1 = (uint32_t *)(((uint8_t *)oa_report1) + hsw_oa_formats[i].b_off);
-                c1 = (uint32_t *)(((uint8_t *)oa_report1) + hsw_oa_formats[i].c_off);
+                a1 = (uint32_t *)(((uint8_t *)oa_report1) + perf.oa_formats[i].a_off);
+                b1 = (uint32_t *)(((uint8_t *)oa_report1) + perf.oa_formats[i].b_off);
+                c1 = (uint32_t *)(((uint8_t *)oa_report1) + perf.oa_formats[i].c_off);
 
                 /* NB: The least significant bit of the Haswell OA report
                  * timestamp corresponds to 80 nanoseconds.
@@ -763,7 +760,7 @@ test_oa_formats(void)
 
                 /* C2 corresponds to a clock counter for this metric set but
                  * it's not included in all of the formats. */
-                if (hsw_oa_formats[i].n_c) {
+                if (perf.oa_formats[i].n_c) {
                         uint64_t freq;
 
                         /* The first report might have a clock count of zero
@@ -793,26 +790,26 @@ test_oa_formats(void)
                  */
                 max_delta = clock_delta * 40;
 
-                for (int j = hsw_oa_formats[i].first_a;
-                     j < hsw_oa_formats[i].n_a;
+                for (int j = perf.oa_formats[i].first_a;
+                     j < perf.oa_formats[i].n_a;
                      j++)
                 {
                         uint32_t delta = a1[j] - a0[j];
 
-                        if (hsw_undefined_a_counters[j])
+                        if (perf.undefined_a_counters[j])
                                 continue;
 
                         igt_debug("A%d: delta = %"PRIu32"\n", j, delta);
                         igt_assert(delta <= max_delta); 
                 }
 
-                for (int j = 0; j < hsw_oa_formats[i].n_b; j++) {
+                for (int j = 0; j < perf.oa_formats[i].n_b; j++) {
                         uint32_t delta = b1[j] - b0[j];
                         igt_debug("B%d: delta = %"PRIu32"\n", j, delta);
                         igt_assert(delta <= max_delta); 
                 }
 
-                for (int j = 0; j < hsw_oa_formats[i].n_c; j++) {
+                for (int j = 0; j < perf.oa_formats[i].n_c; j++) {
                         uint32_t delta = c1[j] - c0[j];
                         igt_debug("C%d: delta = %"PRIu32"\n", j, delta);
                         igt_assert(delta <= max_delta); 
@@ -2017,6 +2014,22 @@ test_i915_ref_count(void)
         igt_assert_eq(ref_count0, baseline);
 
         drm_fd = drm_open_driver_render(DRIVER_INTEL);
+}
+
+static void
+init_perf_test(void)
+{
+        if (IS_HASWELL(devid)) {
+                perf.i915_oa_format = I915_OA_FORMAT_A45_B8_C8;
+                perf.oa_formats=hsw_oa_formats;
+                perf.oa_formats_size=ARRAY_SIZE(hsw_oa_formats);
+		perf.undefined_a_counters = hsw_undefined_a_counters;
+        } else {
+                perf.i915_oa_format = I915_OA_FORMAT_A32u40_A4u32_B8_C8;
+                perf.oa_formats=bdw_oa_formats;
+                perf.oa_formats_size=ARRAY_SIZE(bdw_oa_formats);
+		perf.undefined_a_counters = bdw_undefined_a_counters;
+        }
 }
 
 igt_main
