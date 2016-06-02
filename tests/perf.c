@@ -1921,7 +1921,7 @@ test_per_ctx_mi_rpc(void)
                  * the OA report timestamps should be almost identical but
                  * allow a 320 nanoseconds margin (4 x 80ns)
                  */
-                delta_delta = delta_ts64 - delta_oa32;
+                delta_delta=delta_ts64 > delta_oa32 ? (delta_ts64 - delta_oa32) : (delta_oa32 - delta_ts64);
                 igt_assert(delta_delta <= 4);
 
                 intel_batchbuffer_free(batch);
