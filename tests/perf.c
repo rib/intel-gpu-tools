@@ -43,6 +43,7 @@
 IGT_TEST_DESCRIPTION("Test the i915 perf metrics streaming interface");
 
 #define GEN6_MI_REPORT_PERF_COUNT ((0x28 << 23) | (3 - 2))
+#define GEN8_MI_REPORT_PERF_COUNT ((0x28 << 23) | (2))
 
 #define GFX_OP_PIPE_CONTROL     ((3 << 29) | (3 << 27) | (2 << 24))
 #define PIPE_CONTROL_CS_STALL           (1 << 20)
@@ -85,6 +86,10 @@ typedef struct {
         int c_off;
         int n_c;
 } oa_format;
+
+typedef struct {
+        uint32_t mi_report_perf_cnt;
+}hw_cmd;
 
 static oa_format hsw_oa_formats[] = {
         { "A13", I915_OA_FORMAT_A13, .size = 64,
@@ -155,8 +160,9 @@ static struct {
 	uint64_t render_basic_id;
 	uint64_t oa_formats_size;
 	int num_of_eus;
-	oa_format *oa_formats;
 	bool *undefined_a_counters;
+	oa_format *oa_formats;
+	hw_cmd hw_cmds;
 
 	uint32_t (*get_clock_delta) (uint32_t *oa_report0,uint32_t *oa_report1,int index);
 }perf;
@@ -1688,7 +1694,7 @@ test_mi_rpc(void)
         drm_intel_bo_unmap(bo);
 
         BEGIN_BATCH(3, 1);
-        OUT_BATCH(GEN6_MI_REPORT_PERF_COUNT);
+        OUT_BATCH(perf.hw_cmds.mi_report_perf_cnt);
         OUT_RELOC(bo, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
                   0); /* offset in bytes */
         OUT_BATCH(0xdeadbeef); /* report ID */
@@ -1755,7 +1761,7 @@ emit_stall_timestamp_and_rpc(struct intel_batchbuffer *batch,
         ADVANCE_BATCH();
 
         BEGIN_BATCH(3, 1);
-        OUT_BATCH(GEN6_MI_REPORT_PERF_COUNT);
+        OUT_BATCH(perf.hw_cmds.mi_report_perf_cnt);
         OUT_RELOC(dst, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
                   report_dst_offset);
         OUT_BATCH(report_id);
@@ -2080,6 +2086,7 @@ init_perf_test(void)
                 perf.oa_formats=hsw_oa_formats;
                 perf.oa_formats_size=ARRAY_SIZE(hsw_oa_formats);
                 perf.undefined_a_counters = hsw_undefined_a_counters;
+                perf.hw_cmds.mi_report_perf_cnt=GEN6_MI_REPORT_PERF_COUNT;
 
                 perf.get_clock_delta=hsw_get_clock_delta;
         } else {
@@ -2088,6 +2095,7 @@ init_perf_test(void)
                 perf.oa_formats=bdw_oa_formats;
                 perf.oa_formats_size=ARRAY_SIZE(bdw_oa_formats);
                 perf.undefined_a_counters = bdw_undefined_a_counters;
+                perf.hw_cmds.mi_report_perf_cnt=GEN8_MI_REPORT_PERF_COUNT;
 
                 perf.get_clock_delta=bdw_get_clock_delta;
         }
