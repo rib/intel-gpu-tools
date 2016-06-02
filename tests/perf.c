@@ -2174,31 +2174,33 @@ igt_main
                 test_invalid_oa_exponent();
         igt_subtest("low-oa-exponent-permissions")
                 test_low_oa_exponent_permissions();
-        igt_subtest("oa-exponents") {
-                test_oa_exponents(300);
-                test_oa_exponents(450);
-        }
 
         igt_subtest("per-context-mode-unprivileged")
                 test_per_context_mode_unprivileged();
-
-        igt_subtest("buffer-fill")
-                test_buffer_fill();
 
         igt_subtest("disabled-read-error")
                 test_disabled_read_error();
         igt_subtest("non-sampling-read-error")
                 test_non_sampling_read_error();
 
-        igt_subtest("enable-disable")
-                test_enable_disable();
+        if (IS_HASWELL(devid)) {
+                igt_subtest("oa-exponents") {
+                        test_oa_exponents(300);
+                        test_oa_exponents(450);
+                }
 
-        igt_subtest("blocking")
-                test_blocking();
+                igt_subtest("buffer-fill")
+                        test_buffer_fill();
 
-        igt_subtest("polling")
-                test_polling();
+                igt_subtest("enable-disable")
+                        test_enable_disable();
 
+                igt_subtest("blocking")
+                        test_blocking();
+
+                igt_subtest("polling")
+                        test_polling();
+        }
         igt_subtest("short-reads")
                 test_short_reads();
 
