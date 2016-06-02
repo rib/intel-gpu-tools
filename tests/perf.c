@@ -159,6 +159,7 @@ static struct {
 	uint64_t i915_oa_format;
 	uint64_t render_basic_id;
 	uint64_t oa_formats_size;
+	uint32_t oa_format_index;
 	int num_of_eus;
 	bool *undefined_a_counters;
 	oa_format *oa_formats;
@@ -878,7 +879,6 @@ test_oa_exponents(int gt_freq_mhz)
                 uint32_t timestamp_delta;
                 uint32_t oa_report0[64];
                 uint32_t oa_report1[64];
-                uint32_t *c0, *c1;
                 uint32_t time_delta;
                 uint32_t clock_delta;
                 uint32_t freq;
@@ -918,9 +918,7 @@ test_oa_exponents(int gt_freq_mhz)
 
                         igt_assert_eq(timestamp_delta, expected_timestamp_delta);
 
-                        c0 = (uint32_t *)(((uint8_t *)oa_report0) + 224 /* C offset */);
-                        c1 = (uint32_t *)(((uint8_t *)oa_report1) + 224 /* C offset */);
-                        clock_delta = c1[2] - c0[2];
+                        clock_delta = perf.get_clock_delta(oa_report0,oa_report1,perf.oa_format_index);
 
                         time_delta = 80 * timestamp_delta;
 
@@ -2085,6 +2083,7 @@ init_perf_test(void)
                 perf.i915_oa_format = I915_OA_FORMAT_A45_B8_C8;
                 perf.oa_formats=hsw_oa_formats;
                 perf.oa_formats_size=ARRAY_SIZE(hsw_oa_formats);
+                perf.oa_format_index=3;
                 perf.undefined_a_counters = hsw_undefined_a_counters;
                 perf.hw_cmds.mi_report_perf_cnt=GEN6_MI_REPORT_PERF_COUNT;
 
@@ -2094,6 +2093,7 @@ init_perf_test(void)
                 perf.i915_oa_format = I915_OA_FORMAT_A32u40_A4u32_B8_C8;
                 perf.oa_formats=bdw_oa_formats;
                 perf.oa_formats_size=ARRAY_SIZE(bdw_oa_formats);
+                perf.oa_format_index=2;
                 perf.undefined_a_counters = bdw_undefined_a_counters;
                 perf.hw_cmds.mi_report_perf_cnt=GEN8_MI_REPORT_PERF_COUNT;
 
