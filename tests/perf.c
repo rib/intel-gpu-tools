@@ -154,6 +154,7 @@ static struct {
 	uint64_t i915_oa_format;
 	uint64_t render_basic_id;
 	uint64_t oa_formats_size;
+	int num_of_eus;
 	oa_format *oa_formats;
 	bool *undefined_a_counters;
 
@@ -424,6 +425,19 @@ uint32_t *c0, *c1;
         }
 
         return clock_delta;
+}
+
+static int
+get_eu_number(void) {
+       drm_i915_getparam_t gp;
+       int n_eus = 0;
+
+       gp.param = I915_PARAM_EU_TOTAL;
+       gp.value = &n_eus;
+       do_ioctl(drm_fd,DRM_IOCTL_I915_GETPARAM, &gp);
+       igt_assert (n_eus > 0);
+
+       return n_eus;
 }
 
 /* CAP_SYS_ADMIN is required to open system wide metrics, unless the system
@@ -805,12 +819,12 @@ test_oa_formats(void)
 		igt_assert(freq <= gt_max_freq_mhz);
 		igt_debug("clock delta = %"PRIu32"\n", clock_delta);
 
-		/*The maximum rate for any HSW counter =
-		 *   clock_delta * 40 EUs
+		/*The maximum rate for counter =
+		 *   clock_delta * no of EUs
                  *
                  * Sanity check that no counters exceed this delta.
                  */
-                max_delta = clock_delta * 40;
+                max_delta = clock_delta * perf.num_of_eus;
 
                 for (int j = perf.oa_formats[i].first_a;
                      j < perf.oa_formats[i].n_a;
@@ -2056,6 +2070,12 @@ static void
 init_perf_test(void)
 {
         if (IS_HASWELL(devid)) {
+                if (IS_HSW_GT1(devid))
+                        perf.num_of_eus = 10;
+                else if (IS_HSW_GT2(devid))
+                        perf.num_of_eus = 20;
+                else if (IS_HSW_GT3(devid))
+                        perf.num_of_eus = 40;
                 perf.i915_oa_format = I915_OA_FORMAT_A45_B8_C8;
                 perf.oa_formats=hsw_oa_formats;
                 perf.oa_formats_size=ARRAY_SIZE(hsw_oa_formats);
@@ -2063,6 +2083,7 @@ init_perf_test(void)
 
                 perf.get_clock_delta=hsw_get_clock_delta;
         } else {
+                perf.num_of_eus = get_eu_number();
                 perf.i915_oa_format = I915_OA_FORMAT_A32u40_A4u32_B8_C8;
                 perf.oa_formats=bdw_oa_formats;
                 perf.oa_formats_size=ARRAY_SIZE(bdw_oa_formats);
