@@ -320,6 +320,18 @@ read_debugfs_u64_record(const char *file, const char *key)
 }
 
 static bool
+lookup_skl_render_basic_id(void)
+{
+        char buf[256];
+
+        snprintf(buf, sizeof(buf),
+                 "/sys/class/drm/card%d/metrics/fdfc01cc-e28e-423a-aae0-b5ed5d4d7a9f/id",
+                 device);
+
+        return try_read_u64_file(buf, &perf.render_basic_id);
+}
+
+static bool
 lookup_bdw_render_basic_id(void)
 {
         char buf[256];
@@ -2114,7 +2126,7 @@ igt_main
                 device = drm_get_card();
 
                 igt_require(IS_HASWELL(devid) || IS_BROADWELL(devid));
-                igt_require(lookup_hsw_render_basic_id() || lookup_bdw_render_basic_id());
+                igt_require(lookup_hsw_render_basic_id() || lookup_bdw_render_basic_id() || lookup_skl_render_basic_id());
 
                 ret = stat("/proc/sys/dev/i915/perf_stream_paranoid", &sb);
                 igt_require(ret == 0);
