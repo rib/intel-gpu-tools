@@ -2125,7 +2125,7 @@ igt_main
                 devid = intel_get_drm_devid(drm_fd);
                 device = drm_get_card();
 
-                igt_require(IS_HASWELL(devid) || IS_BROADWELL(devid));
+                igt_require(IS_HASWELL(devid) || IS_BROADWELL(devid) || IS_SKYLAKE(devid));
                 igt_require(lookup_hsw_render_basic_id() || lookup_bdw_render_basic_id() || lookup_skl_render_basic_id());
 
                 ret = stat("/proc/sys/dev/i915/perf_stream_paranoid", &sb);
