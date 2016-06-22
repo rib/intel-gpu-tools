@@ -159,6 +159,7 @@ static struct {
 	uint64_t i915_oa_format;
 	uint64_t render_basic_id;
 	uint64_t oa_formats_size;
+	uint64_t timestamp_frequency;
 	uint32_t oa_format_index;
 	int num_of_eus;
 	bool *undefined_a_counters;
@@ -457,6 +458,12 @@ get_eu_number(void) {
        igt_assert (n_eus > 0);
 
        return n_eus;
+}
+
+static uint64_t
+timebase_scale(uint64_t u32_time)
+{
+    return (u32_time * 1000000000) / perf.timestamp_frequency;
 }
 
 /* CAP_SYS_ADMIN is required to open system wide metrics, unless the system
@@ -826,10 +833,7 @@ test_oa_formats(void)
                 b1 = (uint32_t *)(((uint8_t *)oa_report1) + perf.oa_formats[i].b_off);
                 c1 = (uint32_t *)(((uint8_t *)oa_report1) + perf.oa_formats[i].c_off);
 
-                /* NB: The least significant bit of the Haswell OA report
-                 * timestamp corresponds to 80 nanoseconds.
-                 */
-                time_delta = (oa_report1[1] - oa_report0[1]) * 80;
+                time_delta = timebase_scale ((oa_report1[1] - oa_report0[1]));
                 igt_assert_neq(time_delta, 0);
 
 		clock_delta = perf.get_clock_delta(oa_report0,oa_report1,i);
@@ -932,7 +936,7 @@ test_oa_exponents(int gt_freq_mhz)
 
                         clock_delta = perf.get_clock_delta(oa_report0,oa_report1,perf.oa_format_index);
 
-                        time_delta = 80 * timestamp_delta;
+                        time_delta = timebase_scale (timestamp_delta);
 
                         freq = ((uint64_t)clock_delta * 1000) / time_delta;
                         igt_debug("ITER %d: time delta = %"PRIu32"(ns) clock delta = %"PRIu32" freq = %"PRIu32"(mhz)\n",
@@ -1929,9 +1933,9 @@ test_per_ctx_mi_rpc(void)
                 igt_debug("timestamp64 1 = %"PRIu64"\n", timestamp1_64);
 
                 igt_debug("ts32 delta = %u, = %uns\n",
-                          delta_oa32, delta_oa32 * 80);
+                          delta_oa32, (uint32_t)timebase_scale(delta_oa32));
                 igt_debug("ts64 delta = %u, = %uns\n",
-                          delta_ts64, delta_ts64 * 80);
+                          delta_ts64, (uint32_t)timebase_scale(delta_ts64));
 
                 /* The delta as calculated via the PIPE_CONTROL timestamp or
                  * the OA report timestamps should be almost identical but
@@ -2085,6 +2089,8 @@ test_i915_ref_count(void)
 static void
 init_perf_test(void)
 {
+	perf.timestamp_frequency = 12000000;
+
         if (IS_HASWELL(devid)) {
                 if (IS_HSW_GT1(devid))
                         perf.num_of_eus = 10;
@@ -2110,6 +2116,10 @@ init_perf_test(void)
                 perf.hw_cmds.mi_report_perf_cnt=GEN8_MI_REPORT_PERF_COUNT;
 
                 perf.get_clock_delta=bdw_get_clock_delta;
+
+                if (IS_SKYLAKE(devid)) {
+                    perf.timestamp_frequency = 12000000;
+		}
         }
 }
 
