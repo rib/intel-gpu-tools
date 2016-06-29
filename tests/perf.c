@@ -42,6 +42,11 @@
 
 IGT_TEST_DESCRIPTION("Test the i915 perf metrics streaming interface");
 
+#define OAREPORT_REASON_MASK           0x3f
+#define OAREPORT_REASON_SHIFT          19
+#define OAREPORT_REASON_TIMER          (1<<0)
+#define OAREPORT_REASON_CTX_SWITCH     (1<<3)
+
 #define GEN6_MI_REPORT_PERF_COUNT ((0x28 << 23) | (3 - 2))
 #define GEN8_MI_REPORT_PERF_COUNT ((0x28 << 23) | (2))
 
@@ -653,13 +658,20 @@ read_2_oa_reports(int stream_fd,
                               format_size);
         const struct drm_i915_perf_record_header *header;
         uint32_t exponent_mask = (1 << (exponent + 1)) - 1;
+
+        /* Note: we allocate a large buffer so that each read() iteration
+         * should scrape all pending records, which in turn helps us skip
+         * over records that might be affected by any _REPORT_LOST
+         * notification we see.
+         */
+        int buf_size = 65536 * (256 + sizeof(struct drm_i915_perf_record_header));
+        uint8_t *buf = malloc(buf_size);
         int n = 0;
 
         for (int i = 0; i < 1000; i++) {
-                uint8_t buf[512];
                 ssize_t len;
 
-                while ((len = read(stream_fd, buf, sizeof(buf))) < 0 &&
+                while ((len = read(stream_fd, buf, buf_size)) < 0 &&
                        errno == EINTR)
                         ;
 
@@ -672,40 +684,81 @@ read_2_oa_reports(int stream_fd,
 
                         igt_assert_eq(header->pad, 0); /* Reserved */
 
-                        if (header->type != DRM_I915_PERF_RECORD_SAMPLE) {
-                                igt_debug("ignoring non sample record\n");
-                                continue;
+                        /* Currently the only test that should ever expect to
+                         * see a _BUFFER_LOST error is the buffer_fill test,
+                         * otherwise something bad has probably happened...
+                         */
+                        igt_assert_neq(header->type, DRM_I915_PERF_RECORD_OA_BUFFER_LOST);
+
+                        /* At high sampling frequencies the OA HW might not be
+                         * able to cope with all write requests and will notify
+                         * us that a report was lost. We restart our read of two
+                         * sequential reports due to timeline blip this implies
+                         */
+                        if (header->type == DRM_I915_PERF_RECORD_OA_REPORT_LOST) {
+                                igt_debug("read restart: OA trigger collision / report lost\n");
+                                n = 0;
+
+                                /* XXX: break, because we don't know where
+                                 * within the series of already read reports
+                                 * there could be a blip from the lost report.
+                                 */
+                                break;
                         }
+
+                        /* Currently the only other record type expected is a
+                         * _SAMPLE. Notably this test will need updating if
+                         * i915-perf is extended in the future with additional
+                         * record types.
+                         */
+                        igt_assert_eq(header->type, DRM_I915_PERF_RECORD_SAMPLE);
 
                         igt_assert_eq(header->size, sample_size);
 
                         report = (void *)(header + 1);
 
-                        igt_debug("read report: reason = %x, timestamp= %x, exponent mask=%x\n",
+                        igt_debug("read report: reason = %x, timestamp = %x, exponent mask=%x\n",
                                   report[0], report[1], exponent_mask);
 
                         /* Don't expect zero for timestamps */
                         igt_assert_neq(report[1], 0);
 
                         if (timer_only) {
-                                /* For Haswell we don't have a documented
-                                 * report reason field (though empirically
-                                 * report[0] bit 10 does seem to correlate with
-                                 * a timer trigger reason) so we instead infer
-                                 * which reports are timer triggered by
-                                 * checking if the least significant bits are
-                                 * zero and the exponent bit is set.
-                                 */
-                                if ((report[1] & exponent_mask) != (1 << exponent)) {
-                                        n = 0;
-                                        igt_debug("skipping non timer report reason=%x, test=%x\n",
-                                                  report[0], 1<<10);
-
-                                        /* Also assert our hypothesis about the
-                                         * reason bit...
+                                if (IS_HASWELL(devid)) {
+                                        /* For Haswell we don't have a documented
+                                         * report reason field (though empirically
+                                         * report[0] bit 10 does seem to correlate with
+                                         * a timer trigger reason) so we instead infer
+                                         * which reports are timer triggered by
+                                         * checking if the least significant bits are
+                                         * zero and the exponent bit is set.
                                          */
-                                        igt_assert_eq(report[0] & (1 << 10), 0);
-                                        continue;
+                                        if ((report[1] & exponent_mask) != (1 << exponent)) {
+                                                igt_debug("skipping non timer report reason=%x\n",
+                                                          report[0]);
+
+                                                /* Also assert our hypothesis about the
+                                                 * reason bit...
+                                                 */
+                                                igt_assert_eq(report[0] & (1 << 10), 0);
+                                                continue;
+                                        }
+                                } else {
+                                        uint32_t reason = ((report[0] >> OAREPORT_REASON_SHIFT) &
+                                                           OAREPORT_REASON_MASK);
+                                        if (!(reason & OAREPORT_REASON_TIMER)) {
+                                                igt_debug("skipping non timer report reason=%x\n",
+                                                          reason);
+                                                continue;
+                                        }
+
+#warning "Understand from VPG why we might sometimes see unaligned timestamps..."
+                                        if ((report[1] & exponent_mask) != (1 << exponent)) {
+                                                n = 0;
+                                                igt_debug("read restart: spurious timer report with misaligned timestamp %x\n",
+                                                          report[1]);
+                                                continue;
+                                        }
                                 }
                         }
 
@@ -713,10 +766,13 @@ read_2_oa_reports(int stream_fd,
                                 memcpy(oa_report0, report, format_size);
                         else {
                                 memcpy(oa_report1, report, format_size);
+                                free(buf);
                                 return;
                         }
                 }
         }
+
+        free(buf);
 
         igt_assert(!"reached");
 }
@@ -911,10 +967,18 @@ test_oa_exponents(int gt_freq_mhz)
                 expected_timestamp_delta = 2 << i;
 
                 for (int j = 0; j < 10; j++) {
+                        uint32_t freq_margin;
+
                         gt_freq_mhz = sysfs_read("gt_act_freq_mhz");
 
-                        igt_debug("ITER %d: testing OA exponent %d with GT freq = %dmhz\n",
-                                  j, i, gt_freq_mhz);
+                        /* allow a +- 10% error margin when checking that the
+                         * frequency calculated from the OA reports matches the
+                         * frequency according to sysfs.
+                         */
+                        freq_margin = gt_freq_mhz * 0.1;
+
+                        igt_debug("ITER %d: testing OA exponent %d with GT freq = %dmhz +- %u\n",
+                                  j, i, gt_freq_mhz, freq_margin);
 
                         open_and_read_2_oa_reports(perf.i915_oa_format, 256,
                                                    i, /* exponent */
@@ -930,19 +994,23 @@ test_oa_exponents(int gt_freq_mhz)
                                           oa_report0[1], oa_report0[1]);
                                 igt_debug("timestamp1 = %u/0x%x\n",
                                           oa_report1[1], oa_report1[1]);
+                                igt_debug("delta = %u, expected delta = %u\n",
+                                          timestamp_delta,
+                                          expected_timestamp_delta);
                         }
 
                         igt_assert_eq(timestamp_delta, expected_timestamp_delta);
 
-                        clock_delta = perf.get_clock_delta(oa_report0,oa_report1,perf.oa_format_index);
+                        clock_delta = perf.get_clock_delta(oa_report0, oa_report1, perf.oa_format_index);
 
-                        time_delta = timebase_scale (timestamp_delta);
+                        time_delta = timebase_scale(timestamp_delta);
 
                         freq = ((uint64_t)clock_delta * 1000) / time_delta;
                         igt_debug("ITER %d: time delta = %"PRIu32"(ns) clock delta = %"PRIu32" freq = %"PRIu32"(mhz)\n",
                                   j, time_delta, clock_delta, freq);
 
-                        if (freq == gt_freq_mhz)
+                        if (freq < (gt_freq_mhz + freq_margin) &&
+                            freq > (gt_freq_mhz - freq_margin))
                                 n_freq_matches++;
                 }
 
@@ -951,8 +1019,14 @@ test_oa_exponents(int gt_freq_mhz)
 
                 /* Don't assert the calculated frequency for extremely short
                  * durations... */
-                if (i > 3)
-                        igt_assert(n_freq_matches >= 7);
+                if (i > 3) {
+
+                        /* XXX: the bar is very low, since it seems very
+                         * unreliable to pin and query the frequency via
+                         * sysfs.
+                         */
+                        igt_assert(n_freq_matches >= 4);
+                }
         }
 
         gt_frequency_range_restore();
@@ -2089,7 +2163,7 @@ test_i915_ref_count(void)
 static void
 init_perf_test(void)
 {
-	perf.timestamp_frequency = 12000000;
+        perf.timestamp_frequency = 12500000;
 
         if (IS_HASWELL(devid)) {
                 if (IS_HSW_GT1(devid))
@@ -2118,7 +2192,7 @@ init_perf_test(void)
                 perf.get_clock_delta=bdw_get_clock_delta;
 
                 if (IS_SKYLAKE(devid)) {
-                    perf.timestamp_frequency = 12000000;
+                        perf.timestamp_frequency = 12000000;
 		}
         }
 }
@@ -2183,12 +2257,12 @@ igt_main
         igt_subtest("non-sampling-read-error")
                 test_non_sampling_read_error();
 
-        if (IS_HASWELL(devid)) {
-                igt_subtest("oa-exponents") {
-                        test_oa_exponents(300);
-                        test_oa_exponents(450);
-                }
+        igt_subtest("oa-exponents") {
+                test_oa_exponents(450);
+                test_oa_exponents(550);
+        }
 
+        if (IS_HASWELL(devid)) {
                 igt_subtest("buffer-fill")
                         test_buffer_fill();
 
