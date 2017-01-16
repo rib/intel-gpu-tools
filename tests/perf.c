@@ -195,7 +195,7 @@ static int drm_fd = -1;
 static uint32_t devid;
 static int device = -1;
 
-static uint64_t hsw_render_basic_id = UINT64_MAX;
+static uint64_t test_metric_set_id = UINT64_MAX;
 static uint64_t gt_min_freq_mhz_saved = 0;
 static uint64_t gt_max_freq_mhz_saved = 0;
 static uint64_t gt_min_freq_mhz = 0;
@@ -346,17 +346,46 @@ read_debugfs_u64_record(const char *file, const char *key)
 }
 
 static bool
-lookup_hsw_render_basic_id(void)
+lookup_test_metric_set_id(void)
 {
+	const char *test_set_name = NULL;
+	const char *test_set_uuid = NULL;
 	char buf[256];
 
 	igt_assert_neq(device, -1);
+	igt_assert_neq(devid, 0);
+
+	if (IS_HASWELL(devid)) {
+		/* We don't have a TestOa metric set for Haswell so use
+		 * RenderBasic
+		 */
+		test_set_name = "RenderBasic";
+		test_set_uuid = "403d8832-1a27-4aa6-a64e-f5389ce7b212";
+	} else if (IS_BROADWELL(devid)) {
+		test_set_name = "TestOa";
+		test_set_uuid = "d6de6f55-e526-4f79-a6a6-d7315c09044e";
+	} else if (IS_CHERRYVIEW(devid)) {
+		test_set_name = "TestOa";
+		test_set_uuid = "4a534b07-cba3-414d-8d60-874830e883aa";
+	} else if (IS_SKYLAKE(devid)) {
+		test_set_name = "TestOa";
+		test_set_uuid = "544a0c1f-5863-4682-bc59-778b7eab8303";
+	} else if (IS_BROXTON(devid)) {
+		test_set_name = "TestOa";
+		test_set_uuid = "5ee72f5c-092f-421e-8b70-225f7c3e9612";
+	} else
+		return false;
+
+	igt_debug("%s metric set UUID = %s\n",
+		  test_set_name,
+		  test_set_uuid);
 
 	snprintf(buf, sizeof(buf),
-		 "/sys/class/drm/card%d/metrics/403d8832-1a27-4aa6-a64e-f5389ce7b212/id",
-		 device);
+		 "/sys/class/drm/card%d/metrics/%s/id",
+		 device,
+		 test_set_uuid);
 
-	return try_read_u64_file(buf, &hsw_render_basic_id);
+	return try_read_u64_file(buf, &test_metric_set_id);
 }
 
 static void
@@ -424,7 +453,7 @@ test_system_wide_paranoid(void)
 			DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 			/* OA unit configuration */
-			DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+			DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 			DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 			DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
 		};
@@ -450,7 +479,7 @@ test_system_wide_paranoid(void)
 			DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 			/* OA unit configuration */
-			DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+			DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 			DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 			DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
 		};
@@ -484,7 +513,7 @@ test_invalid_open_flags(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 		DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
 	};
@@ -523,7 +552,7 @@ test_invalid_oa_metric_set_id(void)
 	do_ioctl_err(drm_fd, DRM_IOCTL_I915_PERF_OPEN, &param, EINVAL);
 
 	/* Check that we aren't just seeing false positives... */
-	properties[ARRAY_SIZE(properties) - 1] = hsw_render_basic_id;
+	properties[ARRAY_SIZE(properties) - 1] = test_metric_set_id;
 	stream_fd = __perf_open(drm_fd, &param);
 	close(stream_fd);
 
@@ -540,7 +569,7 @@ test_invalid_oa_format_id(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
 		DRM_I915_PERF_PROP_OA_FORMAT, UINT64_MAX,
 	};
@@ -574,7 +603,7 @@ test_missing_sample_flags(void)
 		/* No _PROP_SAMPLE_xyz flags */
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 	};
@@ -727,7 +756,7 @@ open_and_read_2_oa_reports(int format_id,
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, format_id,
 		DRM_I915_PERF_PROP_OA_EXPONENT, exponent,
 
@@ -1039,7 +1068,7 @@ test_invalid_oa_exponent(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 		DRM_I915_PERF_PROP_OA_EXPONENT, 31, /* maximum exponent expected
 						       to be accepted */
@@ -1096,7 +1125,7 @@ test_low_oa_exponent_permissions(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 		DRM_I915_PERF_PROP_OA_EXPONENT, bad_exponent,
 	};
@@ -1161,7 +1190,7 @@ test_per_context_mode_unprivileged(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 		DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
 	};
@@ -1248,7 +1277,7 @@ test_blocking(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
 	};
@@ -1365,7 +1394,7 @@ test_polling(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
 	};
@@ -1506,7 +1535,7 @@ test_buffer_fill(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
 	};
@@ -1580,7 +1609,7 @@ test_enable_disable(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
 	};
@@ -1651,7 +1680,7 @@ test_short_reads(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
 	};
@@ -1738,7 +1767,7 @@ test_non_sampling_read_error(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 
 		/* XXX: no sampling exponent */
@@ -1772,7 +1801,7 @@ test_disabled_read_error(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
 	};
@@ -1834,7 +1863,7 @@ test_mi_rpc(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 
 		/* Note: no OA exponent specified in this case */
@@ -1964,7 +1993,7 @@ test_per_ctx_mi_rpc(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 
 		/* Note: no OA exponent specified in this case */
@@ -2175,7 +2204,7 @@ test_rc6_disable(void)
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
 		/* OA unit configuration */
-		DRM_I915_PERF_PROP_OA_METRICS_SET, hsw_render_basic_id,
+		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, I915_OA_FORMAT_A45_B8_C8,
 		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
 	};
@@ -2276,8 +2305,8 @@ test_i915_ref_count(void)
 	device = drm_get_card();
 
 	igt_require(IS_HASWELL(devid));
-	igt_require(lookup_hsw_render_basic_id());
-	properties[3] = hsw_render_basic_id;
+	igt_require(lookup_test_metric_set_id());
+	properties[3] = test_metric_set_id;
 
 	ref_count0 = read_i915_module_ref();
 	igt_debug("initial ref count with drm_fd open = %u\n", ref_count0);
@@ -2347,7 +2376,7 @@ igt_main
 		device = drm_get_card();
 
 		igt_require(IS_HASWELL(devid));
-		igt_require(lookup_hsw_render_basic_id());
+		igt_require(lookup_test_metric_set_id());
 
 		gt_frequency_range_save();
 
