@@ -249,6 +249,7 @@ static uint64_t gt_max_freq_mhz = 0;
 static uint64_t timestamp_frequency = 12500000;
 static enum drm_i915_oa_format test_oa_format;
 static bool *undefined_a_counters;
+static uint64_t oa_exp_1_millisec;
 
 static igt_render_copyfunc_t render_copy = NULL;
 static uint32_t (*read_report_ticks)(uint32_t *report,
@@ -422,11 +423,11 @@ timebase_scale(uint32_t u32_delta)
 	return ((uint64_t)u32_delta * NSEC_PER_SEC) / timestamp_frequency;
 }
 
-/* Return the largest OA exponent that will still result in a sampling
- * frequency higher than the given frequency.
+/* Returns: the largest OA exponent that will still result in a sampling period
+ * less than or equal to the given @period.
  */
 static int
-max_oa_exponent_for_higher_freq(uint64_t freq)
+max_oa_exponent_for_period_lte(uint64_t period)
 {
 	/* NB: timebase_scale() takes a uint32_t and an exponent of 30
 	 * would already represent a period of ~3 minutes so there's
@@ -434,14 +435,32 @@ max_oa_exponent_for_higher_freq(uint64_t freq)
 	 */
 	for (int i = 0; i < 30; i++) {
 		uint64_t oa_period = timebase_scale(2 << i);
-		uint32_t oa_freq = NSEC_PER_SEC / oa_period;
 
-		if (oa_freq <= freq)
+		if (oa_period > period)
 			return max(0, i - 1);
 	}
 
 	igt_assert(!"reached");
 	return -1;
+}
+
+/* Return: the largest OA exponent that will still result in a sampling
+ * frequency greater than the given @frequency.
+ */
+static int
+max_oa_exponent_for_freq_gt(uint64_t frequency)
+{
+	uint64_t period = NSEC_PER_SEC / frequency;
+
+	igt_assert_neq(period, 0);
+
+	return max_oa_exponent_for_period_lte(period - 1);
+}
+
+static uint64_t
+oa_exponent_to_ns(int exponent)
+{
+       return 1000000000ULL * (2ULL << exponent) / timestamp_frequency;
 }
 
 static uint64_t
@@ -508,6 +527,8 @@ init_sys_info(void)
 	igt_debug("%s metric set UUID = %s\n",
 		  test_set_name,
 		  test_set_uuid);
+
+	oa_exp_1_millisec = max_oa_exponent_for_period_lte(1000000);
 
 	snprintf(buf, sizeof(buf),
 		 "/sys/class/drm/card%d/metrics/%s/id",
@@ -578,7 +599,7 @@ test_system_wide_paranoid(void)
 			/* OA unit configuration */
 			DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 			DRM_I915_PERF_PROP_OA_FORMAT, test_oa_format,
-			DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
+			DRM_I915_PERF_PROP_OA_EXPONENT, oa_exp_1_millisec,
 		};
 		struct drm_i915_perf_open_param param = {
 			.flags = I915_PERF_FLAG_FD_CLOEXEC |
@@ -604,7 +625,7 @@ test_system_wide_paranoid(void)
 			/* OA unit configuration */
 			DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 			DRM_I915_PERF_PROP_OA_FORMAT, test_oa_format,
-			DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
+			DRM_I915_PERF_PROP_OA_EXPONENT, oa_exp_1_millisec,
 		};
 		struct drm_i915_perf_open_param param = {
 			.flags = I915_PERF_FLAG_FD_CLOEXEC |
@@ -638,7 +659,7 @@ test_invalid_open_flags(void)
 		/* OA unit configuration */
 		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, test_oa_format,
-		DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
+		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exp_1_millisec,
 	};
 	struct drm_i915_perf_open_param param = {
 		.flags = ~0, /* Undefined flag bits set! */
@@ -658,7 +679,7 @@ test_invalid_oa_metric_set_id(void)
 
 		/* OA unit configuration */
 		DRM_I915_PERF_PROP_OA_FORMAT, test_oa_format,
-		DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
+		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exp_1_millisec,
 		DRM_I915_PERF_PROP_OA_METRICS_SET, UINT64_MAX,
 	};
 	struct drm_i915_perf_open_param param = {
@@ -693,7 +714,7 @@ test_invalid_oa_format_id(void)
 
 		/* OA unit configuration */
 		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
-		DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
+		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exp_1_millisec,
 		DRM_I915_PERF_PROP_OA_FORMAT, UINT64_MAX,
 	};
 	struct drm_i915_perf_open_param param = {
@@ -727,7 +748,7 @@ test_missing_sample_flags(void)
 
 		/* OA unit configuration */
 		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
-		DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
+		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exp_1_millisec,
 		DRM_I915_PERF_PROP_OA_FORMAT, test_oa_format,
 	};
 	struct drm_i915_perf_open_param param = {
@@ -967,8 +988,6 @@ print_reports(uint32_t *oa_report0, uint32_t *oa_report1, int fmt)
 static void
 test_oa_formats(void)
 {
-	int oa_exponent = 13;
-
 	for (int i = 0; i < ARRAY_SIZE(oa_formats); i++) {
 		uint32_t oa_report0[64];
 		uint32_t oa_report1[64];
@@ -998,7 +1017,7 @@ test_oa_formats(void)
 		igt_debug("Checking OA format %s\n", oa_formats[i].name);
 
 		open_and_read_2_oa_reports(i,
-					   oa_exponent,
+					   oa_exp_1_millisec,
 					   oa_report0,
 					   oa_report1,
 					   false); /* timer reports only */
@@ -1237,7 +1256,7 @@ static void
 test_low_oa_exponent_permissions(void)
 {
 	int max_freq = read_u64_file("/proc/sys/dev/i915/oa_max_sample_rate");
-	int bad_exponent = max_oa_exponent_for_higher_freq(max_freq);
+	int bad_exponent = max_oa_exponent_for_freq_gt(max_freq);
 	int ok_exponent = bad_exponent + 1;
 	uint64_t properties[] = {
 		/* Include OA reports in samples */
@@ -1311,7 +1330,7 @@ test_per_context_mode_unprivileged(void)
 		/* OA unit configuration */
 		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, test_oa_format,
-		DRM_I915_PERF_PROP_OA_EXPONENT, 13, /* 1 millisecond */
+		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exp_1_millisec,
 	};
 	struct drm_i915_perf_open_param param = {
 		.flags = I915_PERF_FLAG_FD_CLOEXEC,
@@ -1384,13 +1403,14 @@ get_time(void)
 static void
 test_blocking(void)
 {
-	/* 40 milliseconds
+	/* ~40 milliseconds
 	 *
 	 * Having a period somewhat > sysconf(_SC_CLK_TCK) helps to stop
 	 * scheduling (liable to kick in when we make blocking poll()s/reads)
 	 * from interfering with the test.
 	 */
-	int oa_exponent = 18;
+	int oa_exponent = max_oa_exponent_for_period_lte(40000000);
+	uint64_t oa_period = oa_exponent_to_ns(oa_exponent);
 	uint64_t properties[] = {
 		/* Include OA reports in samples */
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
@@ -1413,8 +1433,7 @@ test_blocking(void)
 	int64_t tick_ns = 1000000000 / sysconf(_SC_CLK_TCK);
 	int64_t test_duration_ns = tick_ns * 1000;
 
-	/* Based on the 40ms OA sampling period set above: max OA samples: */
-	int max_iterations = (test_duration_ns / 40000000ull) + 1;
+	int max_iterations = (test_duration_ns / oa_period) + 1;
 
 	/* It's a bit tricky to put a lower limit here, but we expect a
 	 * relatively low latency for seeing reports, while we don't currently
@@ -1425,7 +1444,7 @@ test_blocking(void)
 	 * the knowledge that that the driver uses a 200Hz hrtimer (5ms period)
 	 * to check for data and giving some time to read().
 	 */
-	int min_iterations = (test_duration_ns / 46000000ull);
+	int min_iterations = (test_duration_ns / (oa_period + 6000000ull));
 
 	int64_t start;
 	int n = 0;
@@ -1474,7 +1493,7 @@ test_blocking(void)
 	user_ns = (end_times.tms_utime - start_times.tms_utime) * tick_ns;
 	kernel_ns = (end_times.tms_stime - start_times.tms_stime) * tick_ns;
 
-	igt_debug("%d blocking reads during test with 25Hz OA sampling\n", n);
+	igt_debug("%d blocking reads during test with ~25Hz OA sampling\n", n);
 	igt_debug("time in userspace = %"PRIu64"ns (+-%dns) (start utime = %d, end = %d)\n",
 		  user_ns, (int)tick_ns,
 		  (int)start_times.tms_utime, (int)end_times.tms_utime);
@@ -1501,13 +1520,14 @@ test_blocking(void)
 static void
 test_polling(void)
 {
-	/* 40 milliseconds
+	/* ~40 milliseconds
 	 *
 	 * Having a period somewhat > sysconf(_SC_CLK_TCK) helps to stop
 	 * scheduling (liable to kick in when we make blocking poll()s/reads)
 	 * from interfering with the test.
 	 */
-	int oa_exponent = 18;
+	int oa_exponent = max_oa_exponent_for_period_lte(40000000);
+	uint64_t oa_period = oa_exponent_to_ns(oa_exponent);
 	uint64_t properties[] = {
 		/* Include OA reports in samples */
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
@@ -1531,8 +1551,7 @@ test_polling(void)
 	int64_t tick_ns = 1000000000 / sysconf(_SC_CLK_TCK);
 	int64_t test_duration_ns = tick_ns * 1000;
 
-	/* Based on the 40ms OA sampling period set above: max OA samples: */
-	int max_iterations = (test_duration_ns / 40000000ull) + 1;
+	int max_iterations = (test_duration_ns / oa_period) + 1;
 
 	/* It's a bit tricky to put a lower limit here, but we expect a
 	 * relatively low latency for seeing reports, while we don't currently
@@ -1543,7 +1562,7 @@ test_polling(void)
 	 * the knowledge that that the driver uses a 200Hz hrtimer (5ms period)
 	 * to check for data and giving some time to read().
 	 */
-	int min_iterations = (test_duration_ns / 46000000ull);
+	int min_iterations = (test_duration_ns / (oa_period + 6000000ull));
 	int64_t start;
 	int n = 0;
 
@@ -1622,7 +1641,7 @@ test_polling(void)
 	user_ns = (end_times.tms_utime - start_times.tms_utime) * tick_ns;
 	kernel_ns = (end_times.tms_stime - start_times.tms_stime) * tick_ns;
 
-	igt_debug("%d blocking poll()s during test with 25Hz OA sampling\n", n);
+	igt_debug("%d blocking poll()s during test with ~25Hz OA sampling\n", n);
 	igt_debug("time in userspace = %"PRIu64"ns (+-%dns) (start utime = %d, end = %d)\n",
 		  user_ns, (int)tick_ns,
 		  (int)start_times.tms_utime, (int)end_times.tms_utime);
@@ -1648,7 +1667,9 @@ test_polling(void)
 static void
 test_buffer_fill(void)
 {
-	int oa_exponent = 5; /* 5 micro seconds */
+	/* ~5 micro second period */
+	int oa_exponent = max_oa_exponent_for_period_lte(5000);
+	uint64_t oa_period = oa_exponent_to_ns(oa_exponent);
 	uint64_t properties[] = {
 		/* Include OA reports in samples */
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
@@ -1666,7 +1687,12 @@ test_buffer_fill(void)
 	int stream_fd = __perf_open(drm_fd, &param);
 	int buf_size = 65536 * (256 + sizeof(struct drm_i915_perf_record_header));
 	uint8_t *buf = malloc(buf_size);
+	size_t oa_buf_size = 16 * 1024 * 1024;
+	size_t report_size = oa_formats[test_oa_format].size;
+	int n_full_oa_reports = oa_buf_size / report_size;
+	uint64_t fill_duration = n_full_oa_reports * oa_period;
 
+	igt_assert(fill_duration < 1000000000);
 
 	for (int i = 0; i < 5; i++) {
 		struct drm_i915_perf_record_header *header;
@@ -1674,9 +1700,9 @@ test_buffer_fill(void)
 		int offset = 0;
 		int len;
 
-		/* It should take ~330 milliseconds to fill a 16MB OA buffer with a
-		 * 5 microsecond sampling period and 256 byte reports. */
-		nanosleep(&(struct timespec){ .tv_sec = 0, .tv_nsec = 500000000 }, NULL);
+		nanosleep(&(struct timespec){ .tv_sec = 0,
+					      .tv_nsec = fill_duration * 1.25 },
+			  NULL);
 
 		while ((len = read(stream_fd, buf, buf_size)) == -1 && errno == EINTR)
 			;
@@ -1693,15 +1719,17 @@ test_buffer_fill(void)
 
 		igt_assert_eq(overflow_seen, true);
 
-		nanosleep(&(struct timespec){ .tv_sec = 0, .tv_nsec = 1000000 }, NULL);
+		nanosleep(&(struct timespec){ .tv_sec = 0,
+					      .tv_nsec = fill_duration / 2 },
+			  NULL);
 
 		while ((len = read(stream_fd, buf, buf_size)) == -1 && errno == EINTR)
 			;
 
 		igt_assert_neq(len, -1);
 
-		/* expect ~ 200 records in 1 millisecond */
-		igt_assert(len > 256 * 150);
+		igt_assert(len > report_size * n_full_oa_reports * 0.45);
+		igt_assert(len < report_size * n_full_oa_reports * 0.55);
 
 		overflow_seen = false;
 		for (offset = 0; offset < len; offset += header->size) {
@@ -1722,7 +1750,9 @@ test_buffer_fill(void)
 static void
 test_enable_disable(void)
 {
-	int oa_exponent = 5; /* 5 micro seconds */
+	/* ~5 micro second period */
+	int oa_exponent = max_oa_exponent_for_period_lte(5000);
+	uint64_t oa_period = oa_exponent_to_ns(oa_exponent);
 	uint64_t properties[] = {
 		/* Include OA reports in samples */
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
@@ -1741,20 +1771,22 @@ test_enable_disable(void)
 	int stream_fd = __perf_open(drm_fd, &param);
 	int buf_size = 65536 * (256 + sizeof(struct drm_i915_perf_record_header));
 	uint8_t *buf = malloc(buf_size);
+	size_t oa_buf_size = 16 * 1024 * 1024;
+	size_t report_size = oa_formats[test_oa_format].size;
+	int n_full_oa_reports = oa_buf_size / report_size;
+	uint64_t fill_duration = n_full_oa_reports * oa_period;
 
 
 	for (int i = 0; i < 5; i++) {
 		int len;
 
-		/* If the stream were enabled then it would take ~330
-		 * milliseconds to fill a 16MB OA buffer with a 5 microsecond
-		 * sampling period and 256 byte reports.
-		 *
-		 * Giving enough time for an overflow might help catch whether
+		/* Giving enough time for an overflow might help catch whether
 		 * the OA unit has been enabled even if the driver might at
 		 * least avoid copying reports while disabled.
 		 */
-		nanosleep(&(struct timespec){ .tv_sec = 0, .tv_nsec = 500000000 }, NULL);
+		nanosleep(&(struct timespec){ .tv_sec = 0,
+					      .tv_nsec = fill_duration * 1.25 },
+			  NULL);
 
 		while ((len = read(stream_fd, buf, buf_size)) == -1 && errno == EINTR)
 			;
@@ -1764,15 +1796,17 @@ test_enable_disable(void)
 
 		do_ioctl(stream_fd, I915_PERF_IOCTL_ENABLE, 0);
 
-		nanosleep(&(struct timespec){ .tv_sec = 0, .tv_nsec = 1000000 }, NULL);
+		nanosleep(&(struct timespec){ .tv_sec = 0,
+					      .tv_nsec = fill_duration / 2 },
+			  NULL);
 
 		while ((len = read(stream_fd, buf, buf_size)) == -1 && errno == EINTR)
 			;
 
 		igt_assert_neq(len, -1);
 
-		/* expect ~ 200 records in 1 millisecond */
-		igt_assert(len > 256 * 150 && len < 256 * 2000);
+		igt_assert(len > report_size * n_full_oa_reports * 0.45);
+		igt_assert(len < report_size * n_full_oa_reports * 0.55);
 
 		do_ioctl(stream_fd, I915_PERF_IOCTL_DISABLE, 0);
 
@@ -1793,7 +1827,7 @@ test_enable_disable(void)
 static void
 test_short_reads(void)
 {
-	int oa_exponent = 5; /* 5 micro seconds */
+	int oa_exponent = max_oa_exponent_for_period_lte(5000);
 	uint64_t properties[] = {
 		/* Include OA reports in samples */
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
@@ -2336,7 +2370,6 @@ test_per_ctx_mi_rpc(void)
 static void
 test_rc6_disable(void)
 {
-	int oa_exponent = 13; /* 1 millisecond */
 	uint64_t properties[] = {
 		/* Include OA reports in samples */
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
@@ -2344,7 +2377,7 @@ test_rc6_disable(void)
 		/* OA unit configuration */
 		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, test_oa_format,
-		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
+		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exp_1_millisec,
 	};
 	struct drm_i915_perf_open_param param = {
 		.flags = I915_PERF_FLAG_FD_CLOEXEC,
@@ -2410,7 +2443,6 @@ done:
 static void
 test_i915_ref_count(void)
 {
-	int oa_exponent = 13; /* 1 millisecond */
 	uint64_t properties[] = {
 		/* Include OA reports in samples */
 		DRM_I915_PERF_PROP_SAMPLE_OA, true,
@@ -2418,7 +2450,7 @@ test_i915_ref_count(void)
 		/* OA unit configuration */
 		DRM_I915_PERF_PROP_OA_METRICS_SET, 0 /* updated below */,
 		DRM_I915_PERF_PROP_OA_FORMAT, 0, /* update below */
-		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
+		DRM_I915_PERF_PROP_OA_EXPONENT, 0, /* update below */
 	};
 	struct drm_i915_perf_open_param param = {
 		.flags = I915_PERF_FLAG_FD_CLOEXEC,
@@ -2448,6 +2480,7 @@ test_i915_ref_count(void)
 	igt_require(init_sys_info());
 	properties[3] = test_metric_set_id;
 	properties[5] = test_oa_format;
+	properties[7] = oa_exp_1_millisec;
 
 	ref_count0 = read_i915_module_ref();
 	igt_debug("initial ref count with drm_fd open = %u\n", ref_count0);
@@ -2467,7 +2500,7 @@ test_i915_ref_count(void)
 
 	read_2_oa_reports(stream_fd,
 			  test_oa_format,
-			  oa_exponent,
+			  oa_exp_1_millisec,
 			  oa_report0,
 			  oa_report1,
 			  false); /* not just timer reports */
