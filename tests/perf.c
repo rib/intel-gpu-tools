@@ -1144,6 +1144,42 @@ open_and_read_2_oa_reports(int format_id,
 }
 
 static void
+gen8_read_report_clock_ratios(uint32_t *report,
+			      uint32_t *slice_freq_mhz,
+			      uint32_t *unslice_freq_mhz)
+{
+	uint32_t unslice_freq = report[0] & 0x1ff;
+	uint32_t slice_freq_low = (report[0] >> 25) & 0x7f;
+	uint32_t slice_freq_high = (report[0] >> 9) & 0x3;
+	uint32_t slice_freq = slice_freq_low | (slice_freq_high << 7);
+
+	*slice_freq_mhz = (slice_freq * 16666) / 1000;
+	*unslice_freq_mhz = (unslice_freq * 16666) / 1000;
+}
+
+static const char *
+gen8_read_report_reason(uint32_t *report)
+{
+	uint32_t reason = ((report[0] >> OAREPORT_REASON_SHIFT) &
+			   OAREPORT_REASON_MASK);
+
+	if (reason & (1<<0))
+		return "timer";
+	else if (reason & (1<<1))
+	      return "internal trigger 1";
+	else if (reason & (1<<2))
+	      return "internal trigger 2";
+	else if (reason & (1<<3))
+	      return "context switch";
+	else if (reason & (1<<4))
+	      return "GO 1->0 transition (enter RC6)";
+	else if (reason & (1<<5))
+		return "[un]slice clock ratio change";
+	else
+		return "unknown";
+}
+
+static void
 print_reports(uint32_t *oa_report0, uint32_t *oa_report1, int fmt)
 {
 	igt_debug("TIMESTAMP: 1st = %"PRIu32", 2nd = %"PRIu32", delta = %"PRIu32"\n",
@@ -1157,6 +1193,26 @@ print_reports(uint32_t *oa_report0, uint32_t *oa_report1, int fmt)
 
 		igt_debug("CLOCK: 1st = %"PRIu32", 2nd = %"PRIu32", delta = %"PRIu32"\n",
 			  clock0, clock1, clock1 - clock0);
+	}
+
+	if (intel_gen(devid) >= 8) {
+		uint32_t slice_freq0, slice_freq1, unslice_freq0, unslice_freq1;
+		const char *reason0 = gen8_read_report_reason(oa_report0);
+		const char *reason1 = gen8_read_report_reason(oa_report1);
+
+		gen8_read_report_clock_ratios(oa_report0,
+					      &slice_freq0, &unslice_freq0);
+		gen8_read_report_clock_ratios(oa_report1,
+					      &slice_freq1, &unslice_freq1);
+
+		igt_debug("SLICE CLK: 1st = %umhz, 2nd = %umhz, delta = %d\n",
+			  slice_freq0, slice_freq1,
+			  ((int)slice_freq1 - (int)slice_freq0));
+		igt_debug("UNSLICE CLK: 1st = %umhz, 2nd = %umhz, delta = %d\n",
+			  unslice_freq0, unslice_freq1,
+			  ((int)unslice_freq1 - (int)unslice_freq0));
+
+		igt_debug("REASONS: 1st = \"%s\", 2nd = \"%s\"\n", reason0, reason1);
 	}
 
 	/* Gen8+ has some 40bit A counters... */
