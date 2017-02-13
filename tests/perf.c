@@ -1280,6 +1280,66 @@ print_reports(uint32_t *oa_report0, uint32_t *oa_report1, int fmt)
 }
 
 static void
+print_report(uint32_t *report, int fmt)
+{
+	igt_debug("TIMESTAMP: %"PRIu32"\n", report[1]);
+
+	if (IS_HASWELL(devid) && oa_formats[fmt].n_c == 0) {
+		igt_debug("CLOCK = N/A\n");
+	} else {
+		uint32_t clock = read_report_ticks(report, fmt);
+
+		igt_debug("CLOCK: %"PRIu32"\n", clock);
+	}
+
+	if (intel_gen(devid) >= 8) {
+		uint32_t slice_freq, unslice_freq;
+		const char *reason = gen8_read_report_reason(report);
+
+		gen8_read_report_clock_ratios(report, &slice_freq, &unslice_freq);
+
+		igt_debug("SLICE CLK: %umhz\n", slice_freq);
+		igt_debug("UNSLICE CLK: %umhz\n", unslice_freq);
+		igt_debug("REASON: \"%s\"\n", reason);
+		igt_debug("CTX ID: %"PRIu32"/%"PRIx32"\n", report[2], report[2]);
+	}
+
+	/* Gen8+ has some 40bit A counters... */
+	for (int j = 0; j < oa_formats[fmt].n_a40; j++) {
+		uint64_t value = gen8_read_40bit_a_counter(report, fmt, j);
+
+		if (undefined_a_counters[j])
+			continue;
+
+		igt_debug("A%d: %"PRIu64"\n", j, value);
+	}
+
+	for (int j = 0; j < oa_formats[fmt].n_a; j++) {
+		uint32_t *a = (uint32_t *)(((uint8_t *)report) +
+					   oa_formats[fmt].a_off);
+		int a_id = oa_formats[fmt].first_a + j;
+
+		if (undefined_a_counters[a_id])
+			continue;
+
+		igt_debug("A%d: %"PRIu32"\n", a_id, a[j]);
+	}
+
+	for (int j = 0; j < oa_formats[fmt].n_b; j++) {
+		uint32_t *b = (uint32_t *)(((uint8_t *)report) +
+					   oa_formats[fmt].b_off);
+
+		igt_debug("B%d: %"PRIu32"\n", j, b[j]);
+	}
+
+	for (int j = 0; j < oa_formats[fmt].n_c; j++) {
+		uint32_t *c = (uint32_t *)(((uint8_t *)report) +
+					   oa_formats[fmt].c_off);
+
+		igt_debug("C%d: %"PRIu32"\n", j, c[j]);
+	}
+}
+static void
 test_oa_formats(void)
 {
 	for (int i = 0; i < ARRAY_SIZE(oa_formats); i++) {
@@ -2478,14 +2538,25 @@ emit_stall_timestamp_and_rpc(struct intel_batchbuffer *batch,
 				   PIPE_CONTROL_RENDER_TARGET_FLUSH |
 				   PIPE_CONTROL_WRITE_TIMESTAMP);
 
-	BEGIN_BATCH(5, 1);
-	OUT_BATCH(GFX_OP_PIPE_CONTROL | (5 - 2));
-	OUT_BATCH(pipe_ctl_flags);
-	OUT_RELOC(dst, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-		  timestamp_offset);
-	OUT_BATCH(0); /* imm lower */
-	OUT_BATCH(0); /* imm upper */
-	ADVANCE_BATCH();
+	if (intel_gen(devid) >= 8) {
+		BEGIN_BATCH(5, 1);
+		OUT_BATCH(GFX_OP_PIPE_CONTROL | (6 - 2));
+		OUT_BATCH(pipe_ctl_flags);
+		OUT_RELOC(dst, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
+			  timestamp_offset);
+		OUT_BATCH(0); /* imm lower */
+		OUT_BATCH(0); /* imm upper */
+		ADVANCE_BATCH();
+	} else {
+		BEGIN_BATCH(5, 1);
+		OUT_BATCH(GFX_OP_PIPE_CONTROL | (5 - 2));
+		OUT_BATCH(pipe_ctl_flags);
+		OUT_RELOC(dst, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
+			  timestamp_offset);
+		OUT_BATCH(0); /* imm lower */
+		OUT_BATCH(0); /* imm upper */
+		ADVANCE_BATCH();
+	}
 
 	emit_report_perf_count(batch, dst, report_dst_offset, report_id);
 }
@@ -2721,15 +2792,18 @@ hsw_test_single_ctx_counters(void)
  * context associated with that process' drm file descriptor) and the counters
  * should only relate to that specific context.
  *
- * Unfortunately only Haswell limits the progression of OA counters for a
- * single context and so this unit test is Haswell specific. For Gen8+ although
- * reports read via i915 perf can be filtered for a single context the counters
- * themselves always progress as global/system-wide counters affected by all
- * contexts.
+ * For Gen8+ although reports read via i915 perf can be filtered for a single
+ * context the counters themselves always progress as global/system-wide
+ * counters affected by all contexts. To support the INTEL_performance_query
+ * use case on Gen8+ it's necessary to combine OABUFFER and
+ * MI_REPORT_PERF_COUNT reports so that counter normalisation can take into
+ * account context-switch reports and factor out any counter progression not
+ * associated with the current context.
  */
 static void
-test_render_target_writes_a_counter_via_mi_rpc(void)
+gen8_test_single_ctx_render_target_writes_a_counter(void)
 {
+	int oa_exponent = max_oa_exponent_for_period_lte(1000000);
 	uint64_t properties[] = {
 		DRM_I915_PERF_PROP_CTX_HANDLE, UINT64_MAX, /* updated below */
 
@@ -2741,6 +2815,7 @@ test_render_target_writes_a_counter_via_mi_rpc(void)
 		/* OA unit configuration */
 		DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
 		DRM_I915_PERF_PROP_OA_FORMAT, test_oa_format,
+		DRM_I915_PERF_PROP_OA_EXPONENT, oa_exponent,
 
 		/* Note: no OA exponent specified in this case */
 	};
@@ -2749,6 +2824,14 @@ test_render_target_writes_a_counter_via_mi_rpc(void)
 		.num_properties = sizeof(properties) / 16,
 		.properties_ptr = to_user_pointer(properties),
 	};
+	size_t format_size = oa_formats[test_oa_format].size;
+	size_t sample_size = (sizeof(struct drm_i915_perf_record_header) +
+			      format_size);
+	int max_reports = (16 * 1024 * 1024) / format_size;
+	int buf_size = sample_size * max_reports * 1.5;
+	uint8_t *buf = malloc(buf_size);
+	struct drm_i915_perf_record_header *header;
+	ssize_t len;
 
 	/* should be default, but just to be sure... */
 	write_u64_file("/proc/sys/dev/i915/perf_stream_paranoid", 1);
@@ -2761,17 +2844,20 @@ test_render_target_writes_a_counter_via_mi_rpc(void)
 		struct igt_buf src, dst;
 		drm_intel_bo *bo;
 		uint32_t *report0_32, *report1_32;
+		uint32_t *prev;
 		uint64_t timestamp0_64, timestamp1_64;
 		uint32_t delta_ts64, delta_oa32;
 		uint64_t delta_ts64_ns, delta_oa32_ns;
 		uint32_t delta_delta;
-		int n_samples_written;
+		int n_samples_written = 0;
 		int width = 800;
 		int height = 600;
-		uint32_t ctx_id = 0xffffffff; /* invalid id */
+		uint32_t ctx_handle = 0xffffffff; /* invalid handle */
+		uint32_t ctx_id;
+		bool in_ctx = true;
 		int ret;
 
-		igt_drop_root();
+		//igt_drop_root();
 
 		bufmgr = drm_intel_bufmgr_gem_init(drm_fd, 4096);
 		drm_intel_bufmgr_gem_enable_reuse(bufmgr);
@@ -2814,10 +2900,10 @@ test_render_target_writes_a_counter_via_mi_rpc(void)
 			    &src, 0, 0, width, height,
 			    &dst, 0, 0);
 
-		ret = drm_intel_gem_context_get_id(context0, &ctx_id);
+		ret = drm_intel_gem_context_get_id(context0, &ctx_handle);
 		igt_assert_eq(ret, 0);
 		igt_assert_neq(ctx_id, 0xffffffff);
-		properties[1] = ctx_id;
+		properties[1] = ctx_handle;
 
 		igt_debug("opening i915-perf stream\n");
 		stream_fd = __perf_open(drm_fd, &param);
@@ -2882,32 +2968,16 @@ test_render_target_writes_a_counter_via_mi_rpc(void)
 		report0_32 = bo->virtual;
 		igt_assert_eq(report0_32[0], 0xdeadbeef); /* report ID */
 		igt_assert_neq(report0_32[1], 0); /* timestamp */
+		//report0_32[2] = 0xffffffff;
+		prev = report0_32;
+		ctx_id = prev[2];
+		in_ctx = true;
+		igt_debug("MI_RPC(start) CTX ID: %u\n", ctx_id);
 
 		report1_32 = report0_32 + 64;
 		igt_assert_eq(report1_32[0], 0xbeefbeef); /* report ID */
 		igt_assert_neq(report1_32[1], 0); /* timestamp */
-
-		print_reports(report0_32, report1_32,
-			      lookup_format(test_oa_format));
-
-		if (IS_HASWELL(devid)) {
-			/* A40 == N samples written to all render targets */
-			n_samples_written = report1_32[43] - report0_32[43];
-		} else {
-			/* A26 == N 2x2s written to render target */
-			uint64_t a26_0 = gen8_read_40bit_a_counter(report0_32,
-								   test_oa_format,
-								   26);
-			uint64_t a26_1 = gen8_read_40bit_a_counter(report1_32,
-								   test_oa_format,
-								   26);
-			uint64_t a26_delta = gen8_40bit_a_delta(a26_0, a26_1);
-
-			n_samples_written = a26_delta * 4;
-		}
-
-		igt_debug("n samples written = %d\n", n_samples_written);
-		igt_assert_eq(n_samples_written, width * height);
+		//report1_32[2] = 0xffffffff;
 
 		igt_debug("timestamp32 0 = %u\n", report0_32[1]);
 		igt_debug("timestamp32 1 = %u\n", report1_32[1]);
@@ -2939,6 +3009,166 @@ test_render_target_writes_a_counter_via_mi_rpc(void)
 			(delta_ts64_ns - delta_oa32_ns) :
 			(delta_oa32_ns - delta_ts64_ns);
 		igt_assert(delta_delta <= 320);
+
+
+		print_reports(report0_32, report1_32,
+			      lookup_format(test_oa_format));
+
+		while ((len = read(stream_fd, buf, buf_size)) < 0 &&
+		       errno == EINTR)
+			;
+
+		igt_assert(len > 0);
+		igt_debug("read %d bytes\n", (int)len);
+
+		for (size_t offset = 0; offset < len; offset += header->size) {
+			uint32_t *report;
+			uint32_t reason;
+			bool skip = false;
+
+			header = (void *)(buf + offset);
+
+			igt_assert_eq(header->pad, 0); /* Reserved */
+
+			/* Currently the only test that should ever expect to
+			 * see a _BUFFER_LOST error is the buffer_fill test,
+			 * otherwise something bad has probably happened...
+			 */
+			igt_assert_neq(header->type, DRM_I915_PERF_RECORD_OA_BUFFER_LOST);
+
+			/* At high sampling frequencies the OA HW might not be
+			 * able to cope with all write requests and will notify
+			 * us that a report was lost.
+			 *
+			 * XXX: we should maybe restart the test in this case?
+			 */
+			if (header->type == DRM_I915_PERF_RECORD_OA_REPORT_LOST) {
+				igt_debug("OA trigger collision / report lost\n");
+				continue;
+			}
+
+			/* Currently the only other record type expected is a
+			 * _SAMPLE. Notably this test will need updating if
+			 * i915-perf is extended in the future with additional
+			 * record types.
+			 */
+			igt_assert_eq(header->type, DRM_I915_PERF_RECORD_SAMPLE);
+
+			igt_assert_eq(header->size, sample_size);
+
+			report = (void *)(header + 1);
+
+			igt_debug("read report %p: reason = %x, timestamp = %u\n",
+				  report, report[0], report[1]);
+
+			/*
+			 * Annoying cases to consider:
+			 *
+			 * back to back switches for the specific ctx:
+			 *	- are they away, then to, or to then away?
+			 *	- we need to disambiguate switching two or from
+			 */
+
+			/* Don't expect zero for timestamps */
+			igt_assert_neq(report[1], 0);
+
+			{
+				uint32_t time_delta = report[1] - report0_32[1];
+
+				if (timebase_scale(time_delta) > 1000000000) {
+					igt_debug("Skipping report earlier than first MI_RPC (%u)\n", prev[1]);
+					continue;
+				}
+			}
+
+			{
+				uint32_t time_delta = report[1] - report1_32[1];
+
+				if (timebase_scale(time_delta) <= 1000000000) {
+					igt_debug("Report comes after last MI_RPC (%u)\n", report1_32[1]);
+					report = report1_32;
+				}
+			}
+
+
+			igt_debug(" ctx ID: %u/%x\n", report[2], report[2]);
+
+			reason = ((report[0] >> OAREPORT_REASON_SHIFT) &
+				  OAREPORT_REASON_MASK);
+
+			/* Note: we need to be careful to avoid recognising a
+			 * _CTX_SWITCH followed by a non-ctx report as a
+			 * duplicate switch away
+			 */
+			if (report[2] == ctx_id && (reason & OAREPORT_REASON_CTX_SWITCH)) {
+				/* Note it's possible to see sequences of
+				 * switch-away reports since there's no
+				 * switch-in report triggered by the hardware
+				 * and the same context may be scheduled back
+				 * to back. In this case we will accumulate
+				 * between sequential switch-away reports.
+				 */
+				igt_debug(" Switch AWAY (report reason = CTX_SWITCH)\n");
+				in_ctx = false;
+			} else if (in_ctx && prev[2] == ctx_id && report[2] != ctx_id) {
+				igt_debug(" Switch AWAY (observed by ID change)\n");
+				in_ctx = false;
+			} else if (in_ctx == false && report[2] == ctx_id) {
+				/* Note: here we're being careful to consider
+				 * the possibility of a _CTX_SWITCH switch-away
+				 * (with matching ctx_id) followed by a periodic/timer
+				 * report (also with matching ctx_id) due to
+				 * repeat scheduling of the same context
+				 */
+				igt_debug(" Switch TO\n");
+				in_ctx = true;
+				skip = true;
+			} else if (in_ctx) {
+				igt_assert_eq(report[2], ctx_id);
+				igt_debug(" CONTINUATION IN\n");
+			} else {
+				igt_assert_eq(in_ctx, false);
+				//igt_assert_neq(prev[2], ctx_id);
+				igt_assert_neq(report[2], ctx_id);
+				igt_debug(" CONTINUATION OUT\n");
+				skip = true;
+			}
+
+			if (reason & OAREPORT_REASON_CTX_SWITCH) {
+				igt_debug(" reason: ctx-switch\n");
+			} else if (reason & OAREPORT_REASON_TIMER) {
+				igt_debug(" reason: timer\n");
+			}
+
+			/* Don't accumulate deltas in between context switch
+			 * reports, where counter increases belong to other
+			 * contexts
+			 */
+			if (!skip) {
+
+				/* A26 == N 2x2s written to render target */
+				uint64_t a26_0 = gen8_read_40bit_a_counter(prev,
+									   test_oa_format,
+									   21);
+				uint64_t a26_1 = gen8_read_40bit_a_counter(report,
+									   test_oa_format,
+									   21);
+				uint64_t a26_delta = gen8_40bit_a_delta(a26_0, a26_1);
+
+				n_samples_written += a26_delta * 4;
+				igt_debug(" Accumulating reports %p-%p, n_samples += %d, = %d\n",
+					  prev, report, (int)(a26_delta * 4), n_samples_written);
+			}
+
+			prev = report;
+
+			if (report == report1_32)
+				break;
+			//print_report(report, test_oa_format);
+		}
+
+		igt_debug("n samples written = %d\n", n_samples_written);
+		igt_assert_eq(n_samples_written, width * height);
 
 		drm_intel_bo_unreference(src.bo);
 		drm_intel_bo_unreference(dst.bo);
@@ -3201,7 +3431,7 @@ igt_main
 	igt_subtest("mi-rpc")
 		test_mi_rpc();
 
-	igt_subtest("unprivileged-singled-ctx-counters") {
+	igt_subtest("unprivileged-single-ctx-counters") {
 		/* For Gen8+ the OA unit can no longer be made to clock gate
 		 * for a specific context. Additionally the partial-replacement
 		 * functionality to HW filter timer reports for a specific
@@ -3210,6 +3440,17 @@ igt_main
 		 */
 		igt_require(IS_HASWELL(devid));
 		hsw_test_single_ctx_counters();
+	}
+
+	igt_subtest("gen8-unprivileged-single-ctx-counters") {
+		/* For Gen8+ the OA unit can no longer be made to clock gate
+		 * for a specific context. Additionally the partial-replacement
+		 * functionality to HW filter timer reports for a specific
+		 * context (SKL+) can't stop multiple applications viewing
+		 * system-wide data via MI_REPORT_PERF_COUNT commands.
+		 */
+		igt_require(intel_gen(devid) >= 8);
+		gen8_test_single_ctx_render_target_writes_a_counter();
 	}
 
 	igt_subtest("rc6-disable")
