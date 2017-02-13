@@ -2803,7 +2803,7 @@ hsw_test_single_ctx_counters(void)
 static void
 gen8_test_single_ctx_render_target_writes_a_counter(void)
 {
-	int oa_exponent = max_oa_exponent_for_period_lte(100000);
+	int oa_exponent = max_oa_exponent_for_period_lte(1000000);
 	uint64_t properties[] = {
 		//DRM_I915_PERF_PROP_CTX_HANDLE, UINT64_MAX, /* updated below */
 
@@ -3008,7 +3008,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 		delta_delta = delta_ts64_ns > delta_oa32_ns ?
 			(delta_ts64_ns - delta_oa32_ns) :
 			(delta_oa32_ns - delta_ts64_ns);
-		igt_assert(delta_delta <= 320);
+		igt_assert(delta_delta <= 500);
 
 
 		print_reports(report0_32, report1_32,
@@ -3096,23 +3096,25 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			reason = ((report[0] >> OAREPORT_REASON_SHIFT) &
 				  OAREPORT_REASON_MASK);
 
-			/* Note: we need to be careful to avoid recognising a
-			 * _CTX_SWITCH followed by a non-ctx report as a
-			 * duplicate switch away
-			 */
-			if (report[2] == ctx_id && (reason & OAREPORT_REASON_CTX_SWITCH)) {
+			if (in_ctx && report[2] != ctx_id) {
+				igt_debug(" Switch AWAY (observed by ID change)\n");
+				in_ctx = false;
+			} else if (in_ctx == false &&
+				   report[2] == ctx_id && (reason & OAREPORT_REASON_CTX_SWITCH)) {
+				/* Consider that we might have already observed
+				 * a switch-to via a periodic report...
+				 */
+
 				/* Note it's possible to see sequences of
-				 * switch-away reports since there's no
-				 * switch-in report triggered by the hardware
+				 * switch-to reports since there's no
+				 * switch-away report triggered by the hardware
 				 * and the same context may be scheduled back
 				 * to back. In this case we will accumulate
 				 * between sequential switch-away reports.
 				 */
-				igt_debug(" Switch AWAY (report reason = CTX_SWITCH)\n");
-				in_ctx = false;
-			} else if (in_ctx && prev[2] == ctx_id && report[2] != ctx_id) {
-				igt_debug(" Switch AWAY (observed by ID change)\n");
-				in_ctx = false;
+				igt_debug(" Switch TO (report reason = CTX_SWITCH)\n");
+				in_ctx = true;
+				skip = true;
 			} else if (in_ctx == false && report[2] == ctx_id) {
 				/* Note: here we're being careful to consider
 				 * the possibility of a _CTX_SWITCH switch-away
@@ -3120,7 +3122,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 				 * report (also with matching ctx_id) due to
 				 * repeat scheduling of the same context
 				 */
-				igt_debug(" Switch TO\n");
+				igt_debug(" Switch TO (observed by ID change)\n");
 				in_ctx = true;
 				skip = true;
 			} else if (in_ctx) {
