@@ -2803,9 +2803,9 @@ hsw_test_single_ctx_counters(void)
 static void
 gen8_test_single_ctx_render_target_writes_a_counter(void)
 {
-	int oa_exponent = max_oa_exponent_for_period_lte(1000000);
+	int oa_exponent = max_oa_exponent_for_period_lte(100000);
 	uint64_t properties[] = {
-		DRM_I915_PERF_PROP_CTX_HANDLE, UINT64_MAX, /* updated below */
+		//DRM_I915_PERF_PROP_CTX_HANDLE, UINT64_MAX, /* updated below */
 
 		/* Note: we have to specify at least one sample property even
 		 * though we aren't interested in samples in this case
@@ -2903,7 +2903,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 		ret = drm_intel_gem_context_get_id(context0, &ctx_handle);
 		igt_assert_eq(ret, 0);
 		igt_assert_neq(ctx_id, 0xffffffff);
-		properties[1] = ctx_handle;
+		//properties[1] = ctx_handle;
 
 		igt_debug("opening i915-perf stream\n");
 		stream_fd = __perf_open(drm_fd, &param);
