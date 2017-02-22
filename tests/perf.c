@@ -712,11 +712,11 @@ init_sys_info(void)
 		read_report_ticks = hsw_read_report_ticks;
 		sanity_check_reports = hsw_sanity_check_render_basic_reports;
 
-		if (intel_gt(devid) == 1)
+		if (intel_gt(devid) == 0)
 			n_eus = 10;
-		else if (intel_gt(devid) == 2)
+		else if (intel_gt(devid) == 1)
 			n_eus = 20;
-		else if (intel_gt(devid) == 3)
+		else if (intel_gt(devid) == 2)
 			n_eus = 40;
 		else {
 			igt_assert(!"reached");
