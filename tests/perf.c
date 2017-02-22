@@ -1423,7 +1423,7 @@ test_oa_exponents(int gt_freq_mhz)
 	 * test can fail due to buffer overflows if it wasn't possible to
 	 * keep up, so we don't start from an exponent of zero...
 	 */
-	for (int i = 2; i < 20; i++) {
+	for (int i = 5; i < 20; i++) {
 		uint32_t expected_timestamp_delta;
 		uint32_t timestamp_delta;
 		uint32_t oa_report0[64];
@@ -1452,8 +1452,10 @@ test_oa_exponents(int gt_freq_mhz)
 
 			gt_freq_mhz_0 = sysfs_read("gt_act_freq_mhz");
 
-			igt_debug("ITER %d: testing OA exponent %d with sysfs GT freq = %dmhz +- %u\n",
-				  j, i, gt_freq_mhz_0, freq_margin);
+			igt_debug("ITER %d: testing OA exponent %d (period = %"PRIu64"ns) with sysfs GT freq = %dmhz +- %u\n",
+				  j, i,
+				  oa_exponent_to_ns(i),
+				  gt_freq_mhz_0, freq_margin);
 
 			open_and_read_2_oa_reports(test_oa_format,
 						   i, /* exponent */
