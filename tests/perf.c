@@ -143,6 +143,15 @@ enum drm_i915_perf_record_type {
 };
 #endif /* !DRM_I915_PERF_OPEN */
 
+struct counters_record {
+	enum drm_i915_oa_format format;
+
+	uint64_t *a_records;
+	uint64_t *a40_records;
+	uint64_t *b_records;
+	uint64_t *c_records;
+};
+
 static struct {
 	const char *name;
 	size_t size;
@@ -574,6 +583,69 @@ gen8_40bit_a_delta(uint64_t value0, uint64_t value1)
 		return (1ULL << 40) + value1 - value0;
 	else
 		return value1 - value0;
+}
+
+/**/
+static struct counters_record *
+counters_record_allocate(enum drm_i915_oa_format format)
+{
+	struct counters_record *record = calloc(1, sizeof(struct counters_record));
+	record->format = format;
+
+	record->a_records = calloc(oa_formats[format].n_a, sizeof(uint64_t));
+	record->a40_records = calloc(oa_formats[format].n_a40, sizeof(uint64_t));
+	record->b_records = calloc(oa_formats[format].n_b, sizeof(uint64_t));
+	record->c_records = calloc(oa_formats[format].n_c, sizeof(uint64_t));
+
+	return record;
+}
+
+static void
+counters_record_free(struct counters_record *record)
+{
+	free(record->a_records);
+	free(record->a40_records);
+	free(record->b_records);
+	free(record->c_records);
+	free(record);
+}
+
+static void
+counters_record_update(struct counters_record *record,
+		       uint32_t *oa_report0, uint32_t *oa_report1)
+{
+	for (uint32_t i = 0; i < oa_formats[record->format].n_a; i++) {
+		uint32_t *oa_report0_data = (uint32_t *)
+			(((uint8_t *) oa_report0) + oa_formats[record->format].a_off),
+			*oa_report1_data = (uint32_t *)
+			(((uint8_t *) oa_report1) + oa_formats[record->format].a_off);
+		record->a_records[i] += oa_report1_data[i] - oa_report0_data[i];
+	}
+
+	for (uint32_t i = 0; i < oa_formats[record->format].n_a40; i++) {
+		uint64_t value0 = gen8_read_40bit_a_counter(oa_report0, record->format, i),
+			value1 = gen8_read_40bit_a_counter(oa_report1, record->format, i);
+		record->a40_records[i] += gen8_40bit_a_delta(value0, value1);
+	}
+}
+
+static void
+counters_record_reset(struct counters_record *record)
+{
+	memset(record->a_records, 0, sizeof(record->a_records[0]) * oa_formats[record->format].n_a);
+	memset(record->a40_records, 0, sizeof(record->a40_records[0]) * oa_formats[record->format].n_a40);
+	memset(record->b_records, 0, sizeof(record->b_records[0]) * oa_formats[record->format].n_b);
+	memset(record->c_records, 0, sizeof(record->c_records[0]) * oa_formats[record->format].n_c);
+}
+
+static void
+counters_record_print(struct counters_record *record, const char *title)
+{
+	igt_debug("%s:\n", title);
+	for (uint32_t i = 0; i < oa_formats[record->format].n_a; i++)
+		igt_debug("\tA%u = %lu\n", i, record->a_records[i]);
+	for (uint32_t i = 0; i < oa_formats[record->format].n_a40; i++)
+		igt_debug("\tA40_%u = %lu\n", i, record->a40_records[i]);
 }
 
 /* The TestOa metric set is designed so */
@@ -2864,13 +2936,15 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 		uint32_t delta_ts64, delta_oa32;
 		uint64_t delta_ts64_ns, delta_oa32_ns;
 		uint32_t delta_delta;
-		int n_samples_written = 0;
 		int width = 800;
 		int height = 600;
 		uint32_t ctx_handle = 0xffffffff; /* invalid handle */
 		uint32_t ctx_id;
 		bool in_ctx = true;
 		int ret;
+		struct counters_record *records =
+			counters_record_allocate(test_oa_format),
+			*all_records = counters_record_allocate(test_oa_format);
 
 		//igt_drop_root();
 
@@ -2994,6 +3068,13 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 		igt_assert_neq(report1_32[1], 0); /* timestamp */
 		//report1_32[2] = 0xffffffff;
 
+		counters_record_reset(all_records);
+		counters_record_update(all_records, report0_32, report1_32);
+		igt_debug("total: A40_0 = %lu, A40_21 = %lu, A40_26 = %lu\n",
+			  all_records->a40_records[0],
+			  all_records->a40_records[21],
+			  all_records->a40_records[26]);
+
 		igt_debug("timestamp32 0 = %u\n", report0_32[1]);
 		igt_debug("timestamp32 1 = %u\n", report1_32[1]);
 
@@ -3025,9 +3106,6 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			(delta_oa32_ns - delta_ts64_ns);
 		igt_assert(delta_delta <= 500);
 
-
-		print_reports(report0_32, report1_32,
-			      lookup_format(test_oa_format));
 
 		while ((len = read(stream_fd, buf, buf_size)) < 0 &&
 		       errno == EINTR)
@@ -3073,6 +3151,8 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 
 			report = (void *)(header + 1);
 
+			counters_record_reset(all_records);
+			counters_record_update(all_records, prev, report);
 			igt_debug("read report %p: reason = %x, timestamp = %u\n",
 				  report, report[0], report[1]);
 
@@ -3162,30 +3242,23 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			 * contexts
 			 */
 			if (!skip) {
-
-				/* A26 == N 2x2s written to render target */
-				uint64_t a26_0 = gen8_read_40bit_a_counter(prev,
-									   test_oa_format,
-									   21);
-				uint64_t a26_1 = gen8_read_40bit_a_counter(report,
-									   test_oa_format,
-									   21);
-				uint64_t a26_delta = gen8_40bit_a_delta(a26_0, a26_1);
-
-				n_samples_written += a26_delta * 4;
-				igt_debug(" Accumulating reports %p-%p, n_samples += %d, = %d\n",
-					  prev, report, (int)(a26_delta * 4), n_samples_written);
+				counters_record_update(records, prev, report);
 			}
 
 			prev = report;
 
 			if (report == report1_32)
 				break;
-			//print_report(report, test_oa_format);
 		}
 
-		igt_debug("n samples written = %d\n", n_samples_written);
-		igt_assert_eq(n_samples_written, width * height);
+		igt_debug("n samples written = %ld/%lu (%ix%i)\n",
+			  records->a40_records[21],
+			  records->a40_records[26],
+			  width, height);
+		counters_record_print(records, "filtered");
+		igt_assert_eq(records->a40_records[26] * 4, width * height);
+
+		counters_record_free(records);
 
 		drm_intel_bo_unreference(src.bo);
 		drm_intel_bo_unreference(dst.bo);
