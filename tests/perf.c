@@ -3169,8 +3169,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 		uint32_t delta_delta;
 		int width = 800;
 		int height = 600;
-		uint32_t ctx_handle = 0xffffffff; /* invalid handle */
-		uint32_t ctx_id;
+		uint32_t ctx_id = 0xffffffff; /* invalid handle */
 		bool in_ctx = true;
 		int ret;
 		struct counters_record *records =
@@ -3220,10 +3219,10 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			    &src, 0, 0, width, height,
 			    &dst, 0, 0);
 
-		ret = drm_intel_gem_context_get_id(context0, &ctx_handle);
+		ret = drm_intel_gem_context_get_id(context0, &ctx_id);
 		igt_assert_eq(ret, 0);
 		igt_assert_neq(ctx_id, 0xffffffff);
-		properties[1] = ctx_handle;
+		properties[1] = ctx_id;
 
 		igt_debug("opening i915-perf stream\n");
 		stream_fd = __perf_open(drm_fd, &param);
