@@ -3334,7 +3334,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 					     256, /* report dst offset */
 					     0xbeefbeef); /* report id */
 
-		intel_batchbuffer_flush_with_context(batch, context0);
+		intel_batchbuffer_flush_with_context(batch, context1);
 
 		ret = drm_intel_bo_map(bo, false /* write enable */);
 		igt_assert_eq(ret, 0);
