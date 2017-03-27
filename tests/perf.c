@@ -3138,14 +3138,14 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			  all_records->a40_records[21],
 			  all_records->a40_records[26]);
 
-		igt_debug("timestamp32 0 = %u\n", report0_32[1]);
-		igt_debug("timestamp32 1 = %u\n", report1_32[1]);
+		igt_debug("oa_timestamp32 0 = %u\n", report0_32[1]);
+		igt_debug("oa_timestamp32 1 = %u\n", report1_32[1]);
 
 		timestamp0_64 = *(uint64_t *)(((uint8_t *)bo->virtual) + 512);
 		timestamp1_64 = *(uint64_t *)(((uint8_t *)bo->virtual) + 520);
 
-		igt_debug("timestamp64 0 = %"PRIu64"\n", timestamp0_64);
-		igt_debug("timestamp64 1 = %"PRIu64"\n", timestamp1_64);
+		igt_debug("ts_timestamp64 0 = %"PRIu64"\n", timestamp0_64);
+		igt_debug("ts_timestamp64 1 = %"PRIu64"\n", timestamp1_64);
 
 		delta_ts64 = timestamp1_64 - timestamp0_64;
 		delta_oa32 = report1_32[1] - report0_32[1];
@@ -3155,7 +3155,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 		delta_oa32_ns = timebase_scale(delta_oa32);
 		delta_ts64_ns = timebase_scale(delta_ts64);
 
-		igt_debug("ts32 delta = %u, = %uns\n",
+		igt_debug("oa32 delta = %u, = %uns\n",
 			  delta_oa32, (unsigned)delta_oa32_ns);
 		igt_debug("ts64 delta = %u, = %uns\n",
 			  delta_ts64, (unsigned)delta_ts64_ns);
