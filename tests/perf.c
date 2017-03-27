@@ -3542,7 +3542,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			  records->a40_records[26],
 			  width, height);
 		counters_record_print(records, "filtered");
-		igt_assert_eq(records->a40_records[26] * 4, width * height);
+		igt_assert_eq(records->a40_records[26], width * height);
 
 		counters_record_free(records);
 
