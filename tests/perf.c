@@ -922,6 +922,63 @@ gt_frequency_range_restore(void)
 	gt_max_freq_mhz = gt_max_freq_mhz_saved;
 }
 
+static int
+i915_read_reports_until_timestamp(int stream_fd,
+				  enum drm_i915_oa_format oa_format,
+				  uint8_t *buf,
+				  uint32_t max_size,
+				  uint32_t start_timestamp,
+				  uint32_t end_timestamp)
+{
+	size_t format_size = oa_formats[oa_format].size;
+	uint32_t last_seen_timestamp = start_timestamp;
+	int total_len = 0;
+
+	while (last_seen_timestamp < end_timestamp) {
+		int offset, len;
+
+		/* Running out of space. */
+		if ((max_size - total_len) < format_size) {
+			igt_warn("run out of space before reaching "
+				 "end timestamp (%u/%u)\n",
+				 last_seen_timestamp, end_timestamp);
+			return -1;
+		}
+
+		while ((len = read(stream_fd, &buf[total_len],
+				   max_size - total_len)) < 0 &&
+		       errno == EINTR)
+			;
+
+		/* Intentionally return an error. */
+		if (len <= 0) {
+			if (errno == EAGAIN)
+				return total_len;
+			else {
+				igt_warn("error read OA stream : %i\n", errno);
+				return -1;
+			}
+		}
+
+		offset = total_len;
+		total_len += len;
+
+		while (offset < total_len) {
+		  const struct drm_i915_perf_record_header *header =
+		    (const struct drm_i915_perf_record_header *) &buf[offset];
+		  uint32_t *report = (uint32_t *) (header + 1);
+
+		  if (header->type == DRM_I915_PERF_RECORD_SAMPLE)
+		    last_seen_timestamp = report[1];
+
+		  offset += header->size;
+		}
+	}
+
+	return total_len;
+}
+
+
 /* CAP_SYS_ADMIN is required to open system wide metrics, unless the system
  * control parameter dev.i915.perf_stream_paranoid == 0 */
 static void
@@ -3337,9 +3394,11 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 		igt_assert(delta_delta <= 500);
 
 
-		while ((len = read(stream_fd, buf, buf_size)) < 0 &&
-		       errno == EINTR)
-			;
+		len = i915_read_reports_until_timestamp(stream_fd,
+							test_oa_format,
+							buf, buf_size,
+							report0_32[1],
+							report1_32[1]);
 
 		igt_assert(len > 0);
 		igt_debug("read %d bytes\n", (int)len);
