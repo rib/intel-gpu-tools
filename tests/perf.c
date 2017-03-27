@@ -3126,7 +3126,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 		in_ctx = true;
 		igt_debug("MI_RPC(start) CTX ID: %u\n", ctx_id);
 
-		report1_32 = report0_32 + 64;
+		report1_32 = report0_32 + 64; /* 64 uint32_t = 256bytes offset */
 		igt_assert_eq(report1_32[0], 0xbeefbeef); /* report ID */
 		igt_assert_neq(report1_32[1], 0); /* timestamp */
 		//report1_32[2] = 0xffffffff;
