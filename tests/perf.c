@@ -3271,7 +3271,32 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 				}
 			}
 
-			if (in_ctx && report[2] != ctx_id) {
+			if (in_ctx &&
+			    (reason & OAREPORT_REASON_CTX_SWITCH) &&
+			    report[2] != ctx_id) {
+				/* Consider only switch-away when a ctx-switch report.
+				 *
+				 * It seems we can get 2 ctx-switch reports to the
+				 * same ctx_id with a timer report in between :
+				 *
+				 * report6: ctx_id=0x10       reason=ctx-switch
+				 * report7: ctx_id=0x42       reason=ctx-switch
+				 * report8: ctx_id=0xffffffff reason=timer
+				 * report9: ctx_id=0x42       reason=ctx-switch
+				 *
+				 * While we do not want to accumulate the values from
+				 * report7, it seems we need to include the report9,
+				 * otherwise we're missing some deltas.
+				 *
+				 * We also notice reports like this :
+				 *
+				 * report6: ctx_id=0x10       reason=ctx-switch
+				 * report7: ctx_id=0x42       reason=ctx-switch
+				 * report8: ctx_id=0x42       reason=ctx-switch
+				 *
+				 * Here as well we want to count report8 but ignore
+				 * report7.
+				 */
 				skip_reason = "Switch AWAY (observed by ID change)";
 				in_ctx = false;
 			} else if (in_ctx == false &&
@@ -3301,7 +3326,8 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 				in_ctx = true;
 				skip = true;
 			} else if (in_ctx) {
-				igt_assert_eq(report[2], ctx_id);
+				igt_assert(report[2] == ctx_id ||
+					   (reason & OAREPORT_REASON_CTX_SWITCH) == 0);
 				skip_reason = "CONTINUATION IN";
 			} else {
 				igt_assert_eq(in_ctx, false);
