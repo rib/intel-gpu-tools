@@ -2981,410 +2981,437 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			      format_size);
 	int max_reports = (16 * 1024 * 1024) / format_size;
 	int buf_size = sample_size * max_reports * 1.5;
+	int child_ret;
 	uint8_t *buf = malloc(buf_size);
-	struct drm_i915_perf_record_header *header;
 	ssize_t len;
+	struct igt_helper_process child = {};
 
 	/* should be default, but just to be sure... */
 	write_u64_file("/proc/sys/dev/i915/perf_stream_paranoid", 1);
 
-	igt_fork(child, 1) {
-		drm_intel_bufmgr *bufmgr;
-		drm_intel_context *context0, *context1;
-		struct intel_batchbuffer *batch;
-		struct igt_buf src, dst;
-		drm_intel_bo *bo;
-		uint32_t *report0_32, *report1_32;
-		uint32_t *prev, *lprev;
-		uint64_t timestamp0_64, timestamp1_64;
-		uint32_t delta_ts64, delta_oa32;
-		uint64_t delta_ts64_ns, delta_oa32_ns;
-		uint32_t delta_delta;
-		int width = 800;
-		int height = 600;
-		uint32_t ctx_id = 0xffffffff; /* invalid handle */
-		uint32_t ctx1_id = 0xffffffff;  /* invalid handle */
-		bool in_ctx = true;
-		int ret;
-		struct counters_record *records =
-			counters_record_allocate(test_oa_format),
-			*all_records = counters_record_allocate(test_oa_format);
+	do {
 
-		//igt_drop_root();
+		igt_fork_helper(&child) {
+			struct drm_i915_perf_record_header *header;
+			drm_intel_bufmgr *bufmgr;
+			drm_intel_context *context0, *context1;
+			struct intel_batchbuffer *batch;
+			struct igt_buf src, dst;
+			drm_intel_bo *bo;
+			uint32_t *report0_32, *report1_32;
+			uint32_t *prev, *lprev;
+			uint64_t timestamp0_64, timestamp1_64;
+			uint32_t delta_ts64, delta_oa32;
+			uint64_t delta_ts64_ns, delta_oa32_ns;
+			uint32_t delta_delta;
+			int width = 800;
+			int height = 600;
+			uint32_t ctx_id = 0xffffffff; /* invalid handle */
+			uint32_t ctx1_id = 0xffffffff;  /* invalid handle */
+			bool in_ctx = true;
+			int ret;
+			struct counters_record *records =
+				counters_record_allocate(test_oa_format),
+				*all_records = counters_record_allocate(test_oa_format);
 
-		bufmgr = drm_intel_bufmgr_gem_init(drm_fd, 4096);
-		drm_intel_bufmgr_gem_enable_reuse(bufmgr);
+			//igt_drop_root();
 
-		scratch_buf_init(bufmgr, &src, width, height, 0xff0000ff);
-		scratch_buf_init(bufmgr, &dst, width, height, 0x00ff00ff);
+			bufmgr = drm_intel_bufmgr_gem_init(drm_fd, 4096);
+			drm_intel_bufmgr_gem_enable_reuse(bufmgr);
 
-		batch = intel_batchbuffer_alloc(bufmgr, devid);
+			scratch_buf_init(bufmgr, &src, width, height, 0xff0000ff);
+			scratch_buf_init(bufmgr, &dst, width, height, 0x00ff00ff);
 
-		context0 = drm_intel_gem_context_create(bufmgr);
-		igt_assert(context0);
+			batch = intel_batchbuffer_alloc(bufmgr, devid);
 
-		context1 = drm_intel_gem_context_create(bufmgr);
-		igt_assert(context1);
+			context0 = drm_intel_gem_context_create(bufmgr);
+			igt_assert(context0);
 
-		igt_debug("submitting warm up render_copy\n");
+			context1 = drm_intel_gem_context_create(bufmgr);
+			igt_assert(context1);
 
-		/* Submit some early, unmeasured, work to the context we want
-		 * to measure to try and catch issues with i915-perf
-		 * initializing the HW context ID for filtering.
-		 *
-		 * We do this because i915-perf single context filtering had
-		 * previously only relied on a hook into context pinning to
-		 * initialize the HW context ID, instead of also trying to
-		 * determine the HW ID while opening the stream, in case it
-		 * has already been pinned.
-		 *
-		 * This wasn't noticed by the previous unit test because we
-		 * were opening the stream while the context hadn't been
-		 * touched or pinned yet and so it worked out correctly to wait
-		 * for the pinning hook.
-		 *
-		 * Now a buggy version of i915-perf will fail to measure
-		 * anything for context0 once this initial render_copy() ends
-		 * up pinning the context since there won't ever be a pinning
-		 * hook callback.
-		 */
-		render_copy(batch,
-			    context0,
-			    &src, 0, 0, width, height,
-			    &dst, 0, 0);
+			igt_debug("submitting warm up render_copy\n");
 
-		ret = drm_intel_gem_context_get_id(context0, &ctx_id);
-		igt_assert_eq(ret, 0);
-		igt_assert_neq(ctx_id, 0xffffffff);
-		properties[1] = ctx_id;
-
-		igt_debug("opening i915-perf stream\n");
-		stream_fd = __perf_open(drm_fd, &param);
-
-		bo = drm_intel_bo_alloc(bufmgr, "mi_rpc dest bo", 4096, 64);
-
-		ret = drm_intel_bo_map(bo, true /* write enable */);
-		igt_assert_eq(ret, 0);
-
-		memset(bo->virtual, 0x80, 4096);
-		drm_intel_bo_unmap(bo);
-
-		emit_stall_timestamp_and_rpc(batch,
-					     bo,
-					     512 /* timestamp offset */,
-					     0, /* report dst offset */
-					     0xdeadbeef); /* report id */
-
-		/* Explicitly flush here (even though the render_copy() call
-		 * will itself flush before/after the copy) to clarify that
-		 * that the PIPE_CONTROL + MI_RPC commands will be in a
-		 * separate batch from the copy.
-		 */
-		intel_batchbuffer_flush_with_context(batch, context0);
-
-		render_copy(batch,
-			    context0,
-			    &src, 0, 0, width, height,
-			    &dst, 0, 0);
-
-		/* Another redundant flush to clarify batch bo is free to reuse */
-		intel_batchbuffer_flush_with_context(batch, context0);
-
-		/* submit two copies on the other context to avoid a false
-		 * positive in case the driver somehow ended up filtering for
-		 * context1
-		 */
-		render_copy(batch,
-			    context1,
-			    &src, 0, 0, width, height,
-			    &dst, 0, 0);
-
-		ret = drm_intel_gem_context_get_id(context1, &ctx1_id);
-		igt_assert_eq(ret, 0);
-		igt_assert_neq(ctx1_id, 0xffffffff);
-
-		render_copy(batch,
-			    context1,
-			    &src, 0, 0, width, height,
-			    &dst, 0, 0);
-
-		/* And another */
-		intel_batchbuffer_flush_with_context(batch, context1);
-
-		emit_stall_timestamp_and_rpc(batch,
-					     bo,
-					     520 /* timestamp offset */,
-					     256, /* report dst offset */
-					     0xbeefbeef); /* report id */
-
-		intel_batchbuffer_flush_with_context(batch, context1);
-
-		ret = drm_intel_bo_map(bo, false /* write enable */);
-		igt_assert_eq(ret, 0);
-
-		report0_32 = bo->virtual;
-		igt_assert_eq(report0_32[0], 0xdeadbeef); /* report ID */
-		igt_assert_neq(report0_32[1], 0); /* timestamp */
-		//report0_32[2] = 0xffffffff;
-		prev = lprev = report0_32;
-		ctx_id = prev[2];
-		in_ctx = true;
-		igt_debug("MI_RPC(start) CTX ID: %u\n", ctx_id);
-
-		report1_32 = report0_32 + 64; /* 64 uint32_t = 256bytes offset */
-		igt_assert_eq(report1_32[0], 0xbeefbeef); /* report ID */
-		igt_assert_neq(report1_32[1], 0); /* timestamp */
-		//report1_32[2] = 0xffffffff;
-		ctx1_id = report1_32[2];
-
-		counters_record_reset(all_records);
-		counters_record_update(all_records, report0_32, report1_32);
-		igt_debug("total: A40_0 = %lu, A40_21 = %lu, A40_26 = %lu\n",
-			  all_records->a40_records[0],
-			  all_records->a40_records[21],
-			  all_records->a40_records[26]);
-
-		igt_debug("oa_timestamp32 0 = %u\n", report0_32[1]);
-		igt_debug("oa_timestamp32 1 = %u\n", report1_32[1]);
-		igt_debug("ctx_id 0 = %u\n", report0_32[2]);
-		igt_debug("ctx_id 1 = %u\n", report1_32[2]);
-
-		timestamp0_64 = *(uint64_t *)(((uint8_t *)bo->virtual) + 512);
-		timestamp1_64 = *(uint64_t *)(((uint8_t *)bo->virtual) + 520);
-
-		igt_debug("ts_timestamp64 0 = %"PRIu64"\n", timestamp0_64);
-		igt_debug("ts_timestamp64 1 = %"PRIu64"\n", timestamp1_64);
-
-		delta_ts64 = timestamp1_64 - timestamp0_64;
-		delta_oa32 = report1_32[1] - report0_32[1];
-
-		/* sanity check that we can pass the delta to timebase_scale */
-		igt_assert(delta_ts64 < UINT32_MAX);
-		delta_oa32_ns = timebase_scale(delta_oa32);
-		delta_ts64_ns = timebase_scale(delta_ts64);
-
-		igt_debug("oa32 delta = %u, = %uns\n",
-			  delta_oa32, (unsigned)delta_oa32_ns);
-		igt_debug("ts64 delta = %u, = %uns\n",
-			  delta_ts64, (unsigned)delta_ts64_ns);
-
-		/* The delta as calculated via the PIPE_CONTROL timestamp or
-		 * the OA report timestamps should be almost identical but
-		 * allow a 320 nanoseconds margin.
-		 */
-		delta_delta = delta_ts64_ns > delta_oa32_ns ?
-			(delta_ts64_ns - delta_oa32_ns) :
-			(delta_oa32_ns - delta_ts64_ns);
-		igt_assert(delta_delta <= 500);
-
-
-		len = i915_read_reports_until_timestamp(test_oa_format,
-							buf, buf_size,
-							report0_32[1],
-							report1_32[1]);
-
-		igt_assert(len > 0);
-		igt_debug("read %d bytes\n", (int)len);
-
-		for (size_t offset = 0; offset < len; offset += header->size) {
-			uint32_t *report;
-			uint32_t reason;
-			bool skip = false;
-			const char *skip_reason, *report_reason;
-
-			header = (void *)(buf + offset);
-
-			igt_assert_eq(header->pad, 0); /* Reserved */
-
-			/* Currently the only test that should ever expect to
-			 * see a _BUFFER_LOST error is the buffer_fill test,
-			 * otherwise something bad has probably happened...
-			 */
-			igt_assert_neq(header->type, DRM_I915_PERF_RECORD_OA_BUFFER_LOST);
-
-			/* At high sampling frequencies the OA HW might not be
-			 * able to cope with all write requests and will notify
-			 * us that a report was lost.
+			/* Submit some early, unmeasured, work to the context we want
+			 * to measure to try and catch issues with i915-perf
+			 * initializing the HW context ID for filtering.
 			 *
-			 * XXX: we should maybe restart the test in this case?
+			 * We do this because i915-perf single context filtering had
+			 * previously only relied on a hook into context pinning to
+			 * initialize the HW context ID, instead of also trying to
+			 * determine the HW ID while opening the stream, in case it
+			 * has already been pinned.
+			 *
+			 * This wasn't noticed by the previous unit test because we
+			 * were opening the stream while the context hadn't been
+			 * touched or pinned yet and so it worked out correctly to wait
+			 * for the pinning hook.
+			 *
+			 * Now a buggy version of i915-perf will fail to measure
+			 * anything for context0 once this initial render_copy() ends
+			 * up pinning the context since there won't ever be a pinning
+			 * hook callback.
 			 */
-			if (header->type == DRM_I915_PERF_RECORD_OA_REPORT_LOST) {
-				igt_debug("OA trigger collision / report lost\n");
-				continue;
-			}
+			render_copy(batch,
+				    context0,
+				    &src, 0, 0, width, height,
+				    &dst, 0, 0);
 
-			/* Currently the only other record type expected is a
-			 * _SAMPLE. Notably this test will need updating if
-			 * i915-perf is extended in the future with additional
-			 * record types.
+			ret = drm_intel_gem_context_get_id(context0, &ctx_id);
+			igt_assert_eq(ret, 0);
+			igt_assert_neq(ctx_id, 0xffffffff);
+			properties[1] = ctx_id;
+
+			igt_debug("opening i915-perf stream\n");
+			stream_fd = __perf_open(drm_fd, &param);
+
+			bo = drm_intel_bo_alloc(bufmgr, "mi_rpc dest bo", 4096, 64);
+
+			ret = drm_intel_bo_map(bo, true /* write enable */);
+			igt_assert_eq(ret, 0);
+
+			memset(bo->virtual, 0x80, 4096);
+			drm_intel_bo_unmap(bo);
+
+			emit_stall_timestamp_and_rpc(batch,
+						     bo,
+						     512 /* timestamp offset */,
+						     0, /* report dst offset */
+						     0xdeadbeef); /* report id */
+
+			/* Explicitly flush here (even though the render_copy() call
+			 * will itself flush before/after the copy) to clarify that
+			 * that the PIPE_CONTROL + MI_RPC commands will be in a
+			 * separate batch from the copy.
 			 */
-			igt_assert_eq(header->type, DRM_I915_PERF_RECORD_SAMPLE);
+			intel_batchbuffer_flush_with_context(batch, context0);
 
-			igt_assert_eq(header->size, sample_size);
+			render_copy(batch,
+				    context0,
+				    &src, 0, 0, width, height,
+				    &dst, 0, 0);
 
-			report = (void *)(header + 1);
+			/* Another redundant flush to clarify batch bo is free to reuse */
+			intel_batchbuffer_flush_with_context(batch, context0);
+
+			/* submit two copies on the other context to avoid a false
+			 * positive in case the driver somehow ended up filtering for
+			 * context1
+			 */
+			render_copy(batch,
+				    context1,
+				    &src, 0, 0, width, height,
+				    &dst, 0, 0);
+
+			ret = drm_intel_gem_context_get_id(context1, &ctx1_id);
+			igt_assert_eq(ret, 0);
+			igt_assert_neq(ctx1_id, 0xffffffff);
+
+			render_copy(batch,
+				    context1,
+				    &src, 0, 0, width, height,
+				    &dst, 0, 0);
+
+			/* And another */
+			intel_batchbuffer_flush_with_context(batch, context1);
+
+			emit_stall_timestamp_and_rpc(batch,
+						     bo,
+						     520 /* timestamp offset */,
+						     256, /* report dst offset */
+						     0xbeefbeef); /* report id */
+
+			intel_batchbuffer_flush_with_context(batch, context1);
+
+			ret = drm_intel_bo_map(bo, false /* write enable */);
+			igt_assert_eq(ret, 0);
+
+			report0_32 = bo->virtual;
+			igt_assert_eq(report0_32[0], 0xdeadbeef); /* report ID */
+			igt_assert_neq(report0_32[1], 0); /* timestamp */
+			//report0_32[2] = 0xffffffff;
+			prev = lprev = report0_32;
+			ctx_id = prev[2];
+			igt_debug("MI_RPC(start) CTX ID: %u\n", ctx_id);
+
+			report1_32 = report0_32 + 64; /* 64 uint32_t = 256bytes offset */
+			igt_assert_eq(report1_32[0], 0xbeefbeef); /* report ID */
+			igt_assert_neq(report1_32[1], 0); /* timestamp */
+			//report1_32[2] = 0xffffffff;
+			ctx1_id = report1_32[2];
 
 			counters_record_reset(all_records);
-			counters_record_update(all_records, lprev, report);
-
-			reason = ((report[0] >> OAREPORT_REASON_SHIFT) &
-				  OAREPORT_REASON_MASK);
-			report_reason = "none";
-			if (reason & OAREPORT_REASON_CTX_SWITCH) {
-				report_reason = "ctx-switch";
-			} else if (reason & OAREPORT_REASON_TIMER) {
-				report_reason = "timer";
-			}
-
-			igt_debug("report %p: ctx_id=%u/%x reason=%x/%s timestamp=%u A40_0=%lu A40_21=%lu A40_26=%lu\n",
-				  report, report[2], report[2], report[0], report_reason, report[1],
+			counters_record_update(all_records, report0_32, report1_32);
+			igt_debug("total: A40_0 = %lu, A40_21 = %lu, A40_26 = %lu\n",
 				  all_records->a40_records[0],
 				  all_records->a40_records[21],
 				  all_records->a40_records[26]);
 
-			/*
-			 * Annoying cases to consider:
-			 *
-			 * back to back switches for the specific ctx:
-			 *	- are they away, then to, or to then away?
-			 *	- we need to disambiguate switching two or from
+			igt_debug("oa_timestamp32 0 = %u\n", report0_32[1]);
+			igt_debug("oa_timestamp32 1 = %u\n", report1_32[1]);
+			igt_debug("ctx_id 0 = %u\n", report0_32[2]);
+			igt_debug("ctx_id 1 = %u\n", report1_32[2]);
+
+			timestamp0_64 = *(uint64_t *)(((uint8_t *)bo->virtual) + 512);
+			timestamp1_64 = *(uint64_t *)(((uint8_t *)bo->virtual) + 520);
+
+			igt_debug("ts_timestamp64 0 = %"PRIu64"\n", timestamp0_64);
+			igt_debug("ts_timestamp64 1 = %"PRIu64"\n", timestamp1_64);
+
+			delta_ts64 = timestamp1_64 - timestamp0_64;
+			delta_oa32 = report1_32[1] - report0_32[1];
+
+			/* sanity check that we can pass the delta to timebase_scale */
+			igt_assert(delta_ts64 < UINT32_MAX);
+			delta_oa32_ns = timebase_scale(delta_oa32);
+			delta_ts64_ns = timebase_scale(delta_ts64);
+
+			igt_debug("oa32 delta = %u, = %uns\n",
+				  delta_oa32, (unsigned)delta_oa32_ns);
+			igt_debug("ts64 delta = %u, = %uns\n",
+				  delta_ts64, (unsigned)delta_ts64_ns);
+
+			/* The delta as calculated via the PIPE_CONTROL timestamp or
+			 * the OA report timestamps should be almost identical but
+			 * allow a 320 nanoseconds margin.
 			 */
+			delta_delta = delta_ts64_ns > delta_oa32_ns ?
+				(delta_ts64_ns - delta_oa32_ns) :
+				(delta_oa32_ns - delta_ts64_ns);
+			if (delta_delta > 500) {
+				igt_debug("skipping\n");
+				exit(EAGAIN);
+			}
 
-			/* Don't expect zero for timestamps */
-			igt_assert_neq(report[1], 0);
+			len = i915_read_reports_until_timestamp(test_oa_format,
+								buf, buf_size,
+								report0_32[1],
+								report1_32[1]);
 
-			{
-				uint32_t time_delta = report[1] - report0_32[1];
+			igt_assert(len > 0);
+			igt_debug("read %d bytes\n", (int)len);
 
-				if (timebase_scale(time_delta) > 1000000000) {
-					igt_debug(" Skipping report earlier than first MI_RPC (%u)\n", prev[1]);
-					lprev = report;
-					continue;
+			for (size_t offset = 0; offset < len; offset += header->size) {
+				uint32_t *report;
+				uint32_t reason;
+				bool skip = false;
+				const char *skip_reason, *report_reason;
+
+				header = (void *)(buf + offset);
+
+				igt_assert_eq(header->pad, 0); /* Reserved */
+
+				/* Currently the only test that should ever expect to
+				 * see a _BUFFER_LOST error is the buffer_fill test,
+				 * otherwise something bad has probably happened...
+				 */
+				igt_assert_neq(header->type, DRM_I915_PERF_RECORD_OA_BUFFER_LOST);
+
+				/* At high sampling frequencies the OA HW might not be
+				 * able to cope with all write requests and will notify
+				 * us that a report was lost.
+				 *
+				 * XXX: we should maybe restart the test in this case?
+				 */
+				if (header->type == DRM_I915_PERF_RECORD_OA_REPORT_LOST) {
+					igt_debug("OA trigger collision / report lost\n");
+					exit(EAGAIN);
+				}
+
+				/* Currently the only other record type expected is a
+				 * _SAMPLE. Notably this test will need updating if
+				 * i915-perf is extended in the future with additional
+				 * record types.
+				 */
+				igt_assert_eq(header->type, DRM_I915_PERF_RECORD_SAMPLE);
+
+				igt_assert_eq(header->size, sample_size);
+
+				report = (void *)(header + 1);
+
+				counters_record_reset(all_records);
+				counters_record_update(all_records, lprev, report);
+
+				reason = ((report[0] >> OAREPORT_REASON_SHIFT) &
+					  OAREPORT_REASON_MASK);
+				report_reason = "none";
+				if (reason & OAREPORT_REASON_CTX_SWITCH) {
+					report_reason = "ctx-switch";
+				} else if (reason & OAREPORT_REASON_TIMER) {
+					report_reason = "timer";
+				}
+
+				igt_debug("report %p: ctx_id=%u/%x reason=%x/%s "
+					  "timestamp=%u A40_0=%lu A40_21=%lu A40_26=%lu\n",
+					  report, report[2], report[2],
+					  report[0], report_reason, report[1],
+					  all_records->a40_records[0],
+					  all_records->a40_records[21],
+					  all_records->a40_records[26]);
+
+				/*
+				 * Annoying cases to consider:
+				 *
+				 * back to back switches for the specific ctx:
+				 *	- are they away, then to, or to then away?
+				 *	- we need to disambiguate switching two or from
+				 */
+
+				/* Don't expect zero for timestamps */
+				igt_assert_neq(report[1], 0);
+
+				{
+					uint32_t time_delta = report[1] - report0_32[1];
+
+					if (timebase_scale(time_delta) > 1000000000) {
+						igt_debug(" Skipping report earlier than first MI_RPC (%u)\n",
+							  prev[1]);
+						lprev = report;
+						continue;
+					}
+				}
+
+				{
+					uint32_t time_delta = report[1] - report1_32[1];
+
+					if (timebase_scale(time_delta) <= 1000000000) {
+						igt_debug(" Report comes after last MI_RPC (%u)\n", report1_32[1]);
+						report = report1_32;
+					}
+				}
+
+				if (in_ctx &&
+				    (reason & OAREPORT_REASON_CTX_SWITCH) &&
+				    report[2] != ctx_id) {
+					/* Consider only switch-away when a ctx-switch report.
+					 *
+					 * It seems we can get 2 ctx-switch reports to the
+					 * same ctx_id with a timer report in between :
+					 *
+					 * report6: ctx_id=0x10       reason=ctx-switch
+					 * report7: ctx_id=0x42       reason=ctx-switch
+					 * report8: ctx_id=0xffffffff reason=timer
+					 * report9: ctx_id=0x42       reason=ctx-switch
+					 *
+					 * While we do not want to accumulate the values from
+					 * report7, it seems we need to include the report9,
+					 * otherwise we're missing some deltas.
+					 *
+					 * We also notice reports like this :
+					 *
+					 * report6: ctx_id=0x10       reason=ctx-switch
+					 * report7: ctx_id=0x42       reason=ctx-switch
+					 * report8: ctx_id=0x42       reason=ctx-switch
+					 *
+					 * Here as well we want to count report8 but ignore
+					 * report7.
+					 */
+					skip_reason = "Switch AWAY (observed by ID change)";
+					in_ctx = false;
+				} else if (in_ctx == false &&
+					   report[2] == ctx_id && (reason & OAREPORT_REASON_CTX_SWITCH)) {
+					/* Consider that we might have already observed
+					 * a switch-to via a periodic report...
+					 */
+
+					/* Note it's possible to see sequences of
+					 * switch-to reports since there's no
+					 * switch-away report triggered by the hardware
+					 * and the same context may be scheduled back
+					 * to back. In this case we will accumulate
+					 * between sequential switch-away reports.
+					 */
+					skip_reason = "Switch TO (report reason = CTX_SWITCH)";
+					in_ctx = true;
+					skip = true;
+				} else if (in_ctx == false && report[2] == ctx_id) {
+					/* Note: here we're being careful to consider
+					 * the possibility of a _CTX_SWITCH switch-away
+					 * (with matching ctx_id) followed by a periodic/timer
+					 * report (also with matching ctx_id) due to
+					 * repeat scheduling of the same context
+					 */
+					skip_reason = "Switch TO (observed by ID change)";
+					in_ctx = true;
+					skip = true;
+				} else if (in_ctx) {
+					igt_assert(report[2] == ctx_id ||
+						   (reason & OAREPORT_REASON_CTX_SWITCH) == 0);
+					skip_reason = "CONTINUATION IN";
+				} else {
+					igt_assert_eq(in_ctx, false);
+					//igt_assert_neq(prev[2], ctx_id);
+					igt_assert_neq(report[2], ctx_id);
+					skip_reason = "CONTINUATION OUT";
+					skip = true;
+				}
+
+				/* Don't accumulate deltas in between context switch
+				 * reports, where counter increases belong to other
+				 * contexts
+				 */
+				if (!skip) {
+					counters_record_update(records, prev, report);
+					igt_debug(" -> Updating records A40_0=%lu A40_21=%lu, A40_26=%lu\n",
+						  records->a40_records[0],
+						  records->a40_records[21],
+						  records->a40_records[26]);
+				} else {
+					igt_debug(" -> Skipping : %s\n", skip_reason);
+				}
+
+
+				prev = lprev = report;
+
+				if (report == report1_32) {
+					igt_debug("Breaking on end of report\n");
+					print_reports(report0_32, report1_32,
+						      lookup_format(test_oa_format));
+					break;
 				}
 			}
 
-			{
-				uint32_t time_delta = report[1] - report1_32[1];
+			igt_debug("n samples written = %ld/%lu (%ix%i)\n",
+				  records->a40_records[21],
+				  records->a40_records[26],
+				  width, height);
+			counters_record_print(records, "filtered");
+			ret = drm_intel_bo_map(src.bo, false /* write enable */);
+			igt_assert_eq(ret, 0);
+			ret = drm_intel_bo_map(dst.bo, false /* write enable */);
+			igt_assert_eq(ret, 0);
 
-				if (timebase_scale(time_delta) <= 1000000000) {
-					igt_debug(" Report comes after last MI_RPC (%u)\n", report1_32[1]);
-					report = report1_32;
-				}
-			}
+			ret = memcmp(src.bo->virtual, dst.bo->virtual, 4 * width * height);
+			if (ret != 0)
+				counters_record_print(all_records, "total");
+			igt_assert_eq(ret, 0);
 
-			if (in_ctx &&
-			    (reason & OAREPORT_REASON_CTX_SWITCH) &&
-			    report[2] != ctx_id) {
-				/* Consider only switch-away when a ctx-switch report.
-				 *
-				 * It seems we can get 2 ctx-switch reports to the
-				 * same ctx_id with a timer report in between :
-				 *
-				 * report6: ctx_id=0x10       reason=ctx-switch
-				 * report7: ctx_id=0x42       reason=ctx-switch
-				 * report8: ctx_id=0xffffffff reason=timer
-				 * report9: ctx_id=0x42       reason=ctx-switch
-				 *
-				 * While we do not want to accumulate the values from
-				 * report7, it seems we need to include the report9,
-				 * otherwise we're missing some deltas.
-				 *
-				 * We also notice reports like this :
-				 *
-				 * report6: ctx_id=0x10       reason=ctx-switch
-				 * report7: ctx_id=0x42       reason=ctx-switch
-				 * report8: ctx_id=0x42       reason=ctx-switch
-				 *
-				 * Here as well we want to count report8 but ignore
-				 * report7.
-				 */
-				skip_reason = "Switch AWAY (observed by ID change)";
-				in_ctx = false;
-			} else if (in_ctx == false &&
-				   report[2] == ctx_id && (reason & OAREPORT_REASON_CTX_SWITCH)) {
-				/* Consider that we might have already observed
-				 * a switch-to via a periodic report...
-				 */
-
-				/* Note it's possible to see sequences of
-				 * switch-to reports since there's no
-				 * switch-away report triggered by the hardware
-				 * and the same context may be scheduled back
-				 * to back. In this case we will accumulate
-				 * between sequential switch-away reports.
-				 */
-				skip_reason = "Switch TO (report reason = CTX_SWITCH)";
-				in_ctx = true;
-				skip = true;
-			} else if (in_ctx == false && report[2] == ctx_id) {
-				/* Note: here we're being careful to consider
-				 * the possibility of a _CTX_SWITCH switch-away
-				 * (with matching ctx_id) followed by a periodic/timer
-				 * report (also with matching ctx_id) due to
-				 * repeat scheduling of the same context
-				 */
-				skip_reason = "Switch TO (observed by ID change)";
-				in_ctx = true;
-				skip = true;
-			} else if (in_ctx) {
-				igt_assert(report[2] == ctx_id ||
-					   (reason & OAREPORT_REASON_CTX_SWITCH) == 0);
-				skip_reason = "CONTINUATION IN";
-			} else {
-				igt_assert_eq(in_ctx, false);
-				//igt_assert_neq(prev[2], ctx_id);
-				igt_assert_neq(report[2], ctx_id);
-				skip_reason = "CONTINUATION OUT";
-				skip = true;
-			}
-
-			/* Don't accumulate deltas in between context switch
-			 * reports, where counter increases belong to other
-			 * contexts
-			 */
-			if (!skip) {
-				counters_record_update(records, prev, report);
-				igt_debug(" -> Updating records A40_0=%lu A40_21=%lu, A40_26=%lu\n",
-					  records->a40_records[0],
-					  records->a40_records[21],
-					  records->a40_records[26]);
-			} else {
-				igt_debug(" -> Skipping : %s\n", skip_reason);
-			}
+			drm_intel_bo_unmap(src.bo);
+			drm_intel_bo_unmap(dst.bo);
 
 
-			prev = lprev = report;
+			igt_assert_eq(records->a40_records[26], width * height);
 
-			if (report == report1_32) {
-				igt_debug("Breaking on end of report\n");
-				print_reports(report0_32, report1_32,
-					      lookup_format(test_oa_format));
-				break;
-			}
+			counters_record_free(records);
+
+			drm_intel_bo_unreference(src.bo);
+			drm_intel_bo_unreference(dst.bo);
+
+			drm_intel_bo_unmap(bo);
+			drm_intel_bo_unreference(bo);
+			intel_batchbuffer_free(batch);
+			drm_intel_gem_context_destroy(context0);
+			drm_intel_gem_context_destroy(context1);
+			drm_intel_bufmgr_destroy(bufmgr);
+			__perf_close(stream_fd);
 		}
 
-		igt_debug("n samples written = %ld/%lu (%ix%i)\n",
-			  records->a40_records[21],
-			  records->a40_records[26],
-			  width, height);
-		counters_record_print(records, "filtered");
-		igt_assert_eq(records->a40_records[26], width * height);
+		child_ret = igt_wait_helper(&child);
 
-		counters_record_free(records);
+		igt_assert(WEXITSTATUS(child_ret) == EAGAIN ||
+			   WEXITSTATUS(child_ret) == 0);
 
-		drm_intel_bo_unreference(src.bo);
-		drm_intel_bo_unreference(dst.bo);
-
-		drm_intel_bo_unmap(bo);
-		drm_intel_bo_unreference(bo);
-		intel_batchbuffer_free(batch);
-		drm_intel_gem_context_destroy(context0);
-		drm_intel_gem_context_destroy(context1);
-		drm_intel_bufmgr_destroy(bufmgr);
-		__perf_close(stream_fd);
-	}
-
-	igt_waitchildren();
+	} while (WEXITSTATUS(child_ret) == EAGAIN);
 }
 
 static void
