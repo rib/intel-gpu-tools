@@ -243,6 +243,7 @@ static bool hsw_undefined_a_counters[45] = {
 static bool gen8_undefined_a_counters[45];
 
 static int drm_fd = -1;
+static int stream_fd = -1;
 static uint32_t devid;
 static int device = -1;
 static int n_eus;
@@ -264,10 +265,22 @@ static uint32_t (*read_report_ticks)(uint32_t *report,
 static void (*sanity_check_reports)(uint32_t *oa_report0, uint32_t *oa_report1,
 				    enum drm_i915_oa_format format);
 
+static void
+__perf_close(int fd)
+{
+	close(fd);
+	stream_fd = -1;
+}
+
 static int
 __perf_open(int fd, struct drm_i915_perf_open_param *param)
 {
-	int ret = igt_ioctl(fd, DRM_IOCTL_I915_PERF_OPEN, param);
+	int ret;
+
+	if (stream_fd >= 0)
+		__perf_close(stream_fd);
+
+	ret = igt_ioctl(fd, DRM_IOCTL_I915_PERF_OPEN, param);
 
 	igt_assert(ret >= 0);
 	errno = 0;
@@ -871,14 +884,12 @@ test_system_wide_paranoid(void)
 			.num_properties = sizeof(properties) / 16,
 			.properties_ptr = to_user_pointer(properties),
 		};
-		int stream_fd;
-
 		write_u64_file("/proc/sys/dev/i915/perf_stream_paranoid", 0);
 
 		igt_drop_root();
 
 		stream_fd = __perf_open(drm_fd, &param);
-		close(stream_fd);
+		__perf_close(stream_fd);
 	}
 
 	igt_waitchildren();
@@ -926,7 +937,6 @@ test_invalid_oa_metric_set_id(void)
 		.num_properties = sizeof(properties) / 16,
 		.properties_ptr = to_user_pointer(properties),
 	};
-	int stream_fd;
 
 	do_ioctl_err(drm_fd, DRM_IOCTL_I915_PERF_OPEN, &param, EINVAL);
 
@@ -936,7 +946,7 @@ test_invalid_oa_metric_set_id(void)
 	/* Check that we aren't just seeing false positives... */
 	properties[ARRAY_SIZE(properties) - 1] = test_metric_set_id;
 	stream_fd = __perf_open(drm_fd, &param);
-	close(stream_fd);
+	__perf_close(stream_fd);
 
 	/* There's no valid default OA metric set ID... */
 	param.num_properties--;
@@ -961,7 +971,6 @@ test_invalid_oa_format_id(void)
 		.num_properties = sizeof(properties) / 16,
 		.properties_ptr = to_user_pointer(properties),
 	};
-	int stream_fd;
 
 	do_ioctl_err(drm_fd, DRM_IOCTL_I915_PERF_OPEN, &param, EINVAL);
 
@@ -971,7 +980,7 @@ test_invalid_oa_format_id(void)
 	/* Check that we aren't just seeing false positives... */
 	properties[ARRAY_SIZE(properties) - 1] = test_oa_format;
 	stream_fd = __perf_open(drm_fd, &param);
-	close(stream_fd);
+	__perf_close(stream_fd);
 
 	/* There's no valid default OA format... */
 	param.num_properties--;
@@ -999,8 +1008,7 @@ test_missing_sample_flags(void)
 }
 
 static void
-read_2_oa_reports(int stream_fd,
-		  int format_id,
+read_2_oa_reports(int format_id,
 		  int exponent,
 		  uint32_t *oa_report0,
 		  uint32_t *oa_report1,
@@ -1161,12 +1169,13 @@ open_and_read_2_oa_reports(int format_id,
 		.num_properties = sizeof(properties) / 16,
 		.properties_ptr = to_user_pointer(properties),
 	};
-	int stream_fd = __perf_open(drm_fd, &param);
 
-	read_2_oa_reports(stream_fd, format_id, exponent,
+	stream_fd = __perf_open(drm_fd, &param);
+
+	read_2_oa_reports(format_id, exponent,
 			  oa_report0, oa_report1, timer_only);
 
-	close(stream_fd);
+	__perf_close(stream_fd);
 }
 
 static void
@@ -1565,9 +1574,10 @@ test_invalid_oa_exponent(void)
 		.num_properties = sizeof(properties) / 16,
 		.properties_ptr = to_user_pointer(properties),
 	};
-	int stream_fd = __perf_open(drm_fd, &param);
 
-	close(stream_fd);
+	stream_fd = __perf_open(drm_fd, &param);
+
+	__perf_close(stream_fd);
 
 	for (int i = 32; i < 65; i++) {
 		properties[7] = i;
@@ -1617,12 +1627,10 @@ test_low_oa_exponent_permissions(void)
 	properties[7] = ok_exponent;
 
 	igt_fork(child, 1) {
-		int stream_fd;
-
 		igt_drop_root();
 
 		stream_fd = __perf_open(drm_fd, &param);
-		close(stream_fd);
+		__perf_close(stream_fd);
 	}
 
 	igt_waitchildren();
@@ -1671,7 +1679,6 @@ test_per_context_mode_unprivileged(void)
 	igt_fork(child, 1) {
 		drm_intel_context *context;
 		drm_intel_bufmgr *bufmgr;
-		int stream_fd;
 		uint32_t ctx_id = 0xffffffff; /* invalid id */
 		int ret;
 
@@ -1689,7 +1696,7 @@ test_per_context_mode_unprivileged(void)
 		properties[1] = ctx_id;
 
 		stream_fd = __perf_open(drm_fd, &param);
-		close(stream_fd);
+		__perf_close(stream_fd);
 
 		drm_intel_gem_context_destroy(context);
 		drm_intel_bufmgr_destroy(bufmgr);
@@ -1752,7 +1759,6 @@ test_blocking(void)
 		.num_properties = sizeof(properties) / 16,
 		.properties_ptr = to_user_pointer(properties),
 	};
-	int stream_fd = __perf_open(drm_fd, &param);
 	uint8_t buf[1024 * 1024];
 	struct tms start_times;
 	struct tms end_times;
@@ -1776,6 +1782,8 @@ test_blocking(void)
 
 	int64_t start;
 	int n = 0;
+
+	stream_fd = __perf_open(drm_fd, &param);
 
 	times(&start_times);
 
@@ -1886,7 +1894,7 @@ test_blocking(void)
 
 	igt_assert(kernel_ns <= (test_duration_ns / 100ull));
 
-	close(stream_fd);
+	__perf_close(stream_fd);
 }
 
 static void
@@ -1915,7 +1923,6 @@ test_polling(void)
 		.num_properties = sizeof(properties) / 16,
 		.properties_ptr = to_user_pointer(properties),
 	};
-	int stream_fd = __perf_open(drm_fd, &param);
 	uint8_t buf[1024 * 1024];
 	struct tms start_times;
 	struct tms end_times;
@@ -1938,6 +1945,8 @@ test_polling(void)
 	int min_iterations = (test_duration_ns / (oa_period + 6000000ull));
 	int64_t start;
 	int n = 0;
+
+	stream_fd = __perf_open(drm_fd, &param);
 
 	times(&start_times);
 
@@ -2079,7 +2088,7 @@ test_polling(void)
 
 	igt_assert(kernel_ns <= (test_duration_ns / 100ull));
 
-	close(stream_fd);
+	__perf_close(stream_fd);
 }
 
 static void
@@ -2102,7 +2111,6 @@ test_buffer_fill(void)
 		.num_properties = sizeof(properties) / 16,
 		.properties_ptr = to_user_pointer(properties),
 	};
-	int stream_fd = __perf_open(drm_fd, &param);
 	int buf_size = 65536 * (256 + sizeof(struct drm_i915_perf_record_header));
 	uint8_t *buf = malloc(buf_size);
 	size_t oa_buf_size = 16 * 1024 * 1024;
@@ -2111,6 +2119,8 @@ test_buffer_fill(void)
 	uint64_t fill_duration = n_full_oa_reports * oa_period;
 
 	igt_assert(fill_duration < 1000000000);
+
+	stream_fd = __perf_open(drm_fd, &param);
 
 	for (int i = 0; i < 5; i++) {
 		struct drm_i915_perf_record_header *header;
@@ -2162,7 +2172,7 @@ test_buffer_fill(void)
 
 	free(buf);
 
-	close(stream_fd);
+	__perf_close(stream_fd);
 }
 
 static void
@@ -2186,7 +2196,6 @@ test_enable_disable(void)
 		.num_properties = sizeof(properties) / 16,
 		.properties_ptr = to_user_pointer(properties),
 	};
-	int stream_fd = __perf_open(drm_fd, &param);
 	int buf_size = 65536 * (256 + sizeof(struct drm_i915_perf_record_header));
 	uint8_t *buf = malloc(buf_size);
 	size_t oa_buf_size = 16 * 1024 * 1024;
@@ -2194,6 +2203,7 @@ test_enable_disable(void)
 	int n_full_oa_reports = oa_buf_size / report_size;
 	uint64_t fill_duration = n_full_oa_reports * oa_period;
 
+	stream_fd = __perf_open(drm_fd, &param);
 
 	for (int i = 0; i < 5; i++) {
 		int len;
@@ -2239,7 +2249,7 @@ test_enable_disable(void)
 
 	free(buf);
 
-	close(stream_fd);
+	__perf_close(stream_fd);
 }
 
 static void
@@ -2266,7 +2276,6 @@ test_short_reads(void)
 	uint8_t *pages = mmap(NULL, page_size * 2,
 			      PROT_READ|PROT_WRITE, MAP_PRIVATE, zero_fd, 0);
 	struct drm_i915_perf_record_header *header;
-	int stream_fd;
 	int ret;
 
 	igt_assert_neq(zero_fd, -1);
@@ -2323,7 +2332,7 @@ test_short_reads(void)
 	igt_assert_eq(ret, -1);
 	igt_assert_eq(errno, ENOSPC);
 
-	close(stream_fd);
+	__perf_close(stream_fd);
 
 	munmap(pages, page_size * 2);
 }
@@ -2348,14 +2357,16 @@ test_non_sampling_read_error(void)
 		.num_properties = sizeof(properties) / 16,
 		.properties_ptr = to_user_pointer(properties),
 	};
-	int stream_fd = __perf_open(drm_fd, &param);
+	int ret;
 	uint8_t buf[1024];
 
-	int ret = read(stream_fd, buf, sizeof(buf));
+	stream_fd = __perf_open(drm_fd, &param);
+
+	ret = read(stream_fd, buf, sizeof(buf));
 	igt_assert_eq(ret, -1);
 	igt_assert_eq(errno, EIO);
 
-	close(stream_fd);
+	__perf_close(stream_fd);
 }
 
 /* Check that attempts to read from a stream while it is disable will return
@@ -2382,25 +2393,24 @@ test_disabled_read_error(void)
 		.num_properties = sizeof(properties) / 16,
 		.properties_ptr = to_user_pointer(properties),
 	};
-	int stream_fd = __perf_open(drm_fd, &param);
 	uint32_t oa_report0[64];
 	uint32_t oa_report1[64];
 	uint32_t buf[128] = { 0 };
 	int ret;
 
+	stream_fd = __perf_open(drm_fd, &param);
 
 	ret = read(stream_fd, buf, sizeof(buf));
 	igt_assert_eq(ret, -1);
 	igt_assert_eq(errno, EIO);
 
-	close(stream_fd);
+	__perf_close(stream_fd);
 
 
 	param.flags &= ~I915_PERF_FLAG_DISABLED;
 	stream_fd = __perf_open(drm_fd, &param);
 
-	read_2_oa_reports(stream_fd,
-			  test_oa_format,
+	read_2_oa_reports(test_oa_format,
 			  oa_exponent,
 			  oa_report0,
 			  oa_report1,
@@ -2414,14 +2424,13 @@ test_disabled_read_error(void)
 
 	do_ioctl(stream_fd, I915_PERF_IOCTL_ENABLE, 0);
 
-	read_2_oa_reports(stream_fd,
-			  test_oa_format,
+	read_2_oa_reports(test_oa_format,
 			  oa_exponent,
 			  oa_report0,
 			  oa_report1,
 			  false); /* not just timer reports */
 
-	close(stream_fd);
+	__perf_close(stream_fd);
 }
 
 static void
@@ -2470,13 +2479,14 @@ test_mi_rpc(void)
 		.num_properties = sizeof(properties) / 16,
 		.properties_ptr = to_user_pointer(properties),
 	};
-	int stream_fd = __perf_open(drm_fd, &param);
 	drm_intel_bufmgr *bufmgr = drm_intel_bufmgr_gem_init(drm_fd, 4096);
 	drm_intel_context *context;
 	struct intel_batchbuffer *batch;
 	drm_intel_bo *bo;
 	uint32_t *report32;
 	int ret;
+
+	stream_fd = __perf_open(drm_fd, &param);
 
 	drm_intel_bufmgr_gem_enable_reuse(bufmgr);
 
@@ -2515,7 +2525,7 @@ test_mi_rpc(void)
 	intel_batchbuffer_free(batch);
 	drm_intel_gem_context_destroy(context);
 	drm_intel_bufmgr_destroy(bufmgr);
-	close(stream_fd);
+	__perf_close(stream_fd);
 }
 
 static void
@@ -2617,7 +2627,6 @@ hsw_test_single_ctx_counters(void)
 	igt_fork(child, 1) {
 		drm_intel_bufmgr *bufmgr;
 		drm_intel_context *context0, *context1;
-		int stream_fd;
 		struct intel_batchbuffer *batch;
 		struct igt_buf src, dst;
 		drm_intel_bo *bo;
@@ -2796,7 +2805,7 @@ hsw_test_single_ctx_counters(void)
 		drm_intel_gem_context_destroy(context0);
 		drm_intel_gem_context_destroy(context1);
 		drm_intel_bufmgr_destroy(bufmgr);
-		close(stream_fd);
+		__perf_close(stream_fd);
 	}
 
 	igt_waitchildren();
@@ -2819,10 +2828,12 @@ test_rc6_disable(void)
 		.num_properties = sizeof(properties) / 16,
 		.properties_ptr = to_user_pointer(properties),
 	};
-	int stream_fd = __perf_open(drm_fd, &param);
-	uint64_t n_events_start = read_debugfs_u64_record("i915_drpc_info",
-							  "RC6 residency since boot");
-	uint64_t n_events_end;
+	uint64_t n_events_start, n_events_end;
+
+	stream_fd = __perf_open(drm_fd, &param);
+
+	n_events_start = read_debugfs_u64_record("i915_drpc_info",
+						 "RC6 residency since boot");
 
 	nanosleep(&(struct timespec){ .tv_sec = 0, .tv_nsec = 500000000 }, NULL);
 
@@ -2831,7 +2842,7 @@ test_rc6_disable(void)
 
 	igt_assert_eq(n_events_end - n_events_start, 0);
 
-	close(stream_fd);
+	__perf_close(stream_fd);
 
 	n_events_start = read_debugfs_u64_record("i915_drpc_info",
 						 "RC6 residency since boot");
@@ -2893,7 +2904,6 @@ test_i915_ref_count(void)
 		.properties_ptr = to_user_pointer(properties),
 	};
 	unsigned baseline, ref_count0, ref_count1;
-	int stream_fd;
 	uint32_t oa_report0[64];
 	uint32_t oa_report1[64];
 
@@ -2933,14 +2943,13 @@ test_i915_ref_count(void)
 
 	igt_assert(ref_count0 > baseline);
 
-	read_2_oa_reports(stream_fd,
-			  test_oa_format,
+	read_2_oa_reports(test_oa_format,
 			  oa_exp_1_millisec,
 			  oa_report0,
 			  oa_report1,
 			  false); /* not just timer reports */
 
-	close(stream_fd);
+	__perf_close(stream_fd);
 	ref_count0 = read_i915_module_ref();
 	igt_debug("ref count after closing i915 perf stream fd = %u\n", ref_count0);
 	igt_assert_eq(ref_count0, baseline);
