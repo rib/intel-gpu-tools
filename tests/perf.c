@@ -3022,8 +3022,10 @@ igt_main
 		test_oa_exponents(550);
 	}
 
-	igt_subtest("per-context-mode-unprivileged")
+	igt_subtest("per-context-mode-unprivileged") {
+		igt_require(IS_HASWELL(devid));
 		test_per_context_mode_unprivileged();
+	}
 
 	igt_subtest("buffer-fill")
 		test_buffer_fill();
