@@ -1,0 +1,12 @@
+#!/bin/bash
+
+while [ true ]; do
+    cp /tmp/aub /tmp/aub_old
+    dmesg -C
+    echo 255 > /sys/module/drm/parameters/debug
+    ./perf --run-subtest gen8-unprivileged-single-ctx-counters --debug
+    val=$?
+    echo 0 > /sys/module/drm/parameters/debug
+    dmesg > /tmp/kern
+    [[ $val == 0 ]] || break
+done
