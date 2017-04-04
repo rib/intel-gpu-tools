@@ -3412,6 +3412,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			uint32_t *report;
 			uint32_t reason;
 			bool skip = false;
+			const char *skip_reason, *report_reason;
 
 			header = (void *)(buf + offset);
 
@@ -3447,8 +3448,21 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 
 			counters_record_reset(all_records);
 			counters_record_update(all_records, prev, report);
-			igt_debug("read report %p: reason = %x, timestamp = %u\n",
-				  report, report[0], report[1]);
+
+			reason = ((report[0] >> OAREPORT_REASON_SHIFT) &
+				  OAREPORT_REASON_MASK);
+			report_reason = "none";
+			if (reason & OAREPORT_REASON_CTX_SWITCH) {
+				report_reason = "ctx-switch";
+			} else if (reason & OAREPORT_REASON_TIMER) {
+				report_reason = "timer";
+			}
+
+			igt_debug("report %p: ctx_id=%u/%x reason=%x/%s timestamp=%u A40_0=%lu A40_21=%lu A40_26=%lu\n",
+				  report, report[2], report[2], report[0], report_reason, report[1],
+				  all_records->a40_records[0],
+				  all_records->a40_records[21],
+				  all_records->a40_records[26]);
 
 			/*
 			 * Annoying cases to consider:
@@ -3465,7 +3479,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 				uint32_t time_delta = report[1] - report0_32[1];
 
 				if (timebase_scale(time_delta) > 1000000000) {
-					igt_debug("Skipping report earlier than first MI_RPC (%u)\n", prev[1]);
+					igt_debug(" Skipping report earlier than first MI_RPC (%u)\n", prev[1]);
 					continue;
 				}
 			}
@@ -3474,19 +3488,13 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 				uint32_t time_delta = report[1] - report1_32[1];
 
 				if (timebase_scale(time_delta) <= 1000000000) {
-					igt_debug("Report comes after last MI_RPC (%u)\n", report1_32[1]);
+					igt_debug(" Report comes after last MI_RPC (%u)\n", report1_32[1]);
 					report = report1_32;
 				}
 			}
 
-
-			igt_debug(" ctx ID: %u/%x\n", report[2], report[2]);
-
-			reason = ((report[0] >> OAREPORT_REASON_SHIFT) &
-				  OAREPORT_REASON_MASK);
-
 			if (in_ctx && report[2] != ctx_id) {
-				igt_debug(" Switch AWAY (observed by ID change)\n");
+				skip_reason = "Switch AWAY (observed by ID change)";
 				in_ctx = false;
 			} else if (in_ctx == false &&
 				   report[2] == ctx_id && (reason & OAREPORT_REASON_CTX_SWITCH)) {
@@ -3501,7 +3509,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 				 * to back. In this case we will accumulate
 				 * between sequential switch-away reports.
 				 */
-				igt_debug(" Switch TO (report reason = CTX_SWITCH)\n");
+				skip_reason = "Switch TO (report reason = CTX_SWITCH)";
 				in_ctx = true;
 				skip = true;
 			} else if (in_ctx == false && report[2] == ctx_id) {
@@ -3511,24 +3519,18 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 				 * report (also with matching ctx_id) due to
 				 * repeat scheduling of the same context
 				 */
-				igt_debug(" Switch TO (observed by ID change)\n");
+				skip_reason = "Switch TO (observed by ID change)";
 				in_ctx = true;
 				skip = true;
 			} else if (in_ctx) {
 				igt_assert_eq(report[2], ctx_id);
-				igt_debug(" CONTINUATION IN\n");
+				skip_reason = "CONTINUATION IN";
 			} else {
 				igt_assert_eq(in_ctx, false);
 				//igt_assert_neq(prev[2], ctx_id);
 				igt_assert_neq(report[2], ctx_id);
-				igt_debug(" CONTINUATION OUT\n");
+				skip_reason = "CONTINUATION OUT";
 				skip = true;
-			}
-
-			if (reason & OAREPORT_REASON_CTX_SWITCH) {
-				igt_debug(" reason: ctx-switch\n");
-			} else if (reason & OAREPORT_REASON_TIMER) {
-				igt_debug(" reason: timer\n");
 			}
 
 			/* Don't accumulate deltas in between context switch
@@ -3537,12 +3539,23 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			 */
 			if (!skip) {
 				counters_record_update(records, prev, report);
+				igt_debug(" -> Updating records A40_0=%lu A40_21=%lu, A40_26=%lu\n",
+					  records->a40_records[0],
+					  records->a40_records[21],
+					  records->a40_records[26]);
+			} else {
+				igt_debug(" -> Skipping : %s\n", skip_reason);
 			}
+
 
 			prev = report;
 
-			if (report == report1_32)
+			if (report == report1_32) {
+				igt_debug("Breaking on end of report\n");
+				print_reports(report0_32, report1_32,
+					      lookup_format(test_oa_format));
 				break;
+			}
 		}
 
 		igt_debug("n samples written = %ld/%lu (%ix%i)\n",
