@@ -3217,7 +3217,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 		struct igt_buf src, dst;
 		drm_intel_bo *bo;
 		uint32_t *report0_32, *report1_32;
-		uint32_t *prev;
+		uint32_t *prev, *lprev;
 		uint64_t timestamp0_64, timestamp1_64;
 		uint32_t delta_ts64, delta_oa32;
 		uint64_t delta_ts64_ns, delta_oa32_ns;
@@ -3348,7 +3348,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 		igt_assert_eq(report0_32[0], 0xdeadbeef); /* report ID */
 		igt_assert_neq(report0_32[1], 0); /* timestamp */
 		//report0_32[2] = 0xffffffff;
-		prev = report0_32;
+		prev = lprev = report0_32;
 		ctx_id = prev[2];
 		in_ctx = true;
 		igt_debug("MI_RPC(start) CTX ID: %u\n", ctx_id);
@@ -3447,7 +3447,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			report = (void *)(header + 1);
 
 			counters_record_reset(all_records);
-			counters_record_update(all_records, prev, report);
+			counters_record_update(all_records, lprev, report);
 
 			reason = ((report[0] >> OAREPORT_REASON_SHIFT) &
 				  OAREPORT_REASON_MASK);
@@ -3480,6 +3480,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 
 				if (timebase_scale(time_delta) > 1000000000) {
 					igt_debug(" Skipping report earlier than first MI_RPC (%u)\n", prev[1]);
+					lprev = report;
 					continue;
 				}
 			}
@@ -3574,7 +3575,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			}
 
 
-			prev = report;
+			prev = lprev = report;
 
 			if (report == report1_32) {
 				igt_debug("Breaking on end of report\n");
