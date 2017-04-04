@@ -3195,7 +3195,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 	};
 	struct drm_i915_perf_open_param param = {
 		.flags = I915_PERF_FLAG_FD_CLOEXEC,
-		.num_properties = sizeof(properties) / 16,
+		.num_properties = ARRAY_SIZE(properties) / 2,
 		.properties_ptr = to_user_pointer(properties),
 	};
 	size_t format_size = oa_formats[test_oa_format].size;
