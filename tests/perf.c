@@ -3003,6 +3003,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 		int width = 800;
 		int height = 600;
 		uint32_t ctx_id = 0xffffffff; /* invalid handle */
+		uint32_t ctx1_id = 0xffffffff;  /* invalid handle */
 		bool in_ctx = true;
 		int ret;
 		struct counters_record *records =
@@ -3098,6 +3099,10 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			    &src, 0, 0, width, height,
 			    &dst, 0, 0);
 
+		ret = drm_intel_gem_context_get_id(context1, &ctx1_id);
+		igt_assert_eq(ret, 0);
+		igt_assert_neq(ctx1_id, 0xffffffff);
+
 		render_copy(batch,
 			    context1,
 			    &src, 0, 0, width, height,
@@ -3130,6 +3135,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 		igt_assert_eq(report1_32[0], 0xbeefbeef); /* report ID */
 		igt_assert_neq(report1_32[1], 0); /* timestamp */
 		//report1_32[2] = 0xffffffff;
+		ctx1_id = report1_32[2];
 
 		counters_record_reset(all_records);
 		counters_record_update(all_records, report0_32, report1_32);
@@ -3140,6 +3146,8 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 
 		igt_debug("oa_timestamp32 0 = %u\n", report0_32[1]);
 		igt_debug("oa_timestamp32 1 = %u\n", report1_32[1]);
+		igt_debug("ctx_id 0 = %u\n", report0_32[2]);
+		igt_debug("ctx_id 1 = %u\n", report1_32[2]);
 
 		timestamp0_64 = *(uint64_t *)(((uint8_t *)bo->virtual) + 512);
 		timestamp1_64 = *(uint64_t *)(((uint8_t *)bo->virtual) + 520);
