@@ -3464,11 +3464,12 @@ test_rc6_disable(void)
 		.num_properties = sizeof(properties) / 16,
 		.properties_ptr = to_user_pointer(properties),
 	};
-	uint64_t n_events_start = read_debugfs_u64_record("i915_drpc_info",
-							  "RC6 residency since boot");
-	uint64_t n_events_end;
+	uint64_t n_events_start, n_events_end;
 
 	stream_fd = __perf_open(drm_fd, &param);
+
+	n_events_start = read_debugfs_u64_record("i915_drpc_info",
+						 "RC6 residency since boot");
 
 	nanosleep(&(struct timespec){ .tv_sec = 0, .tv_nsec = 500000000 }, NULL);
 
