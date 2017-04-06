@@ -144,13 +144,11 @@ enum drm_i915_perf_record_type {
 };
 #endif /* !DRM_I915_PERF_OPEN */
 
-struct counters_record {
+struct accumulator {
+#define MAX_RAW_OA_COUNTERS 62
 	enum drm_i915_oa_format format;
 
-	uint64_t *a_records;
-	uint64_t *a40_records;
-	uint64_t *b_records;
-	uint64_t *c_records;
+	uint64_t deltas[MAX_RAW_OA_COUNTERS];
 };
 
 static struct {
@@ -599,67 +597,98 @@ gen8_40bit_a_delta(uint64_t value0, uint64_t value1)
 		return value1 - value0;
 }
 
-/**/
-static struct counters_record *
-counters_record_allocate(enum drm_i915_oa_format format)
+static void
+accumulate_uint32(size_t offset,
+		  uint32_t *report0,
+                  uint32_t *report1,
+                  uint64_t *delta)
 {
-	struct counters_record *record = calloc(1, sizeof(struct counters_record));
-	record->format = format;
+	uint32_t value0 = *(uint32_t *)(((uint8_t *)report0) + offset);
+	uint32_t value1 = *(uint32_t *)(((uint8_t *)report1) + offset);
 
-	record->a_records = calloc(oa_formats[format].n_a, sizeof(uint64_t));
-	record->a40_records = calloc(oa_formats[format].n_a40, sizeof(uint64_t));
-	record->b_records = calloc(oa_formats[format].n_b, sizeof(uint64_t));
-	record->c_records = calloc(oa_formats[format].n_c, sizeof(uint64_t));
-
-	return record;
+	*delta += (uint32_t)(value1 - value0);
 }
 
 static void
-counters_record_free(struct counters_record *record)
+accumulate_uint40(int a_index,
+                  uint32_t *report0,
+                  uint32_t *report1,
+		  enum drm_i915_oa_format format,
+                  uint64_t *delta)
 {
-	free(record->a_records);
-	free(record->a40_records);
-	free(record->b_records);
-	free(record->c_records);
-	free(record);
+	uint64_t value0 = gen8_read_40bit_a_counter(report0, format, a_index),
+		 value1 = gen8_read_40bit_a_counter(report1, format, a_index);
+
+	*delta += gen8_40bit_a_delta(value0, value1);
 }
 
 static void
-counters_record_update(struct counters_record *record,
-		       uint32_t *oa_report0, uint32_t *oa_report1)
+accumulate_reports(struct accumulator *accumulator,
+		   uint32_t *start,
+		   uint32_t *end)
 {
-	for (uint32_t i = 0; i < oa_formats[record->format].n_a; i++) {
-		uint32_t *oa_report0_data = (uint32_t *)
-			(((uint8_t *) oa_report0) + oa_formats[record->format].a_off),
-			*oa_report1_data = (uint32_t *)
-			(((uint8_t *) oa_report1) + oa_formats[record->format].a_off);
-		record->a_records[i] += oa_report1_data[i] - oa_report0_data[i];
+	enum drm_i915_oa_format format = accumulator->format;
+	uint64_t *deltas = accumulator->deltas;
+	int idx = 0;
+
+	if (intel_gen(devid) >= 8) {
+		/* timestamp */
+		accumulate_uint32(4, start, end, deltas + idx++);
+
+		/* clock cycles */
+		accumulate_uint32(12, start, end, deltas + idx++);
+	} else {
+		/* timestamp */
+		accumulate_uint32(4, start, end, deltas + idx++);
 	}
 
-	for (uint32_t i = 0; i < oa_formats[record->format].n_a40; i++) {
-		uint64_t value0 = gen8_read_40bit_a_counter(oa_report0, record->format, i),
-			value1 = gen8_read_40bit_a_counter(oa_report1, record->format, i);
-		record->a40_records[i] += gen8_40bit_a_delta(value0, value1);
+	for (int i = 0; i < oa_formats[format].n_a40; i++)
+		accumulate_uint40(i, start, end, format, deltas + idx++);
+
+	for (int i = 0; i < oa_formats[format].n_a; i++) {
+		accumulate_uint32(oa_formats[format].a_off + 4 * i,
+				  start, end, deltas + idx++);
+	}
+
+	for (int i = 0; i < oa_formats[format].n_b; i++) {
+		accumulate_uint32(oa_formats[format].b_off + 4 * i,
+				  start, end, deltas + idx++);
+	}
+
+	for (int i = 0; i < oa_formats[format].n_c; i++) {
+		accumulate_uint32(oa_formats[format].c_off + 4 * i,
+				  start, end, deltas + idx++);
 	}
 }
 
 static void
-counters_record_reset(struct counters_record *record)
+accumulator_print(struct accumulator *accumulator, const char *title)
 {
-	memset(record->a_records, 0, sizeof(record->a_records[0]) * oa_formats[record->format].n_a);
-	memset(record->a40_records, 0, sizeof(record->a40_records[0]) * oa_formats[record->format].n_a40);
-	memset(record->b_records, 0, sizeof(record->b_records[0]) * oa_formats[record->format].n_b);
-	memset(record->c_records, 0, sizeof(record->c_records[0]) * oa_formats[record->format].n_c);
-}
+	enum drm_i915_oa_format format = accumulator->format;
+	uint64_t *deltas = accumulator->deltas;
+	int idx = 0;
 
-static void
-counters_record_print(struct counters_record *record, const char *title)
-{
 	igt_debug("%s:\n", title);
-	for (uint32_t i = 0; i < oa_formats[record->format].n_a; i++)
-		igt_debug("\tA%u = %lu\n", i, record->a_records[i]);
-	for (uint32_t i = 0; i < oa_formats[record->format].n_a40; i++)
-		igt_debug("\tA40_%u = %lu\n", i, record->a40_records[i]);
+	if (intel_gen(devid) >= 8) {
+		igt_debug("\ttime delta = %lu\n", deltas[idx++]);
+		igt_debug("\tclock cycle delta = %lu\n", deltas[idx++]);
+
+		for (int i = 0; i < oa_formats[format].n_a40; i++)
+			igt_debug("\tA%u = %lu\n", i, deltas[idx++]);
+	} else {
+		igt_debug("\ttime delta = %lu\n", deltas[idx++]);
+	}
+
+	for (int i = 0; i < oa_formats[format].n_a; i++) {
+		int a_id = oa_formats[format].first_a + i;
+		igt_debug("\tA%u = %lu\n", a_id, deltas[idx++]);
+	}
+
+	for (int i = 0; i < oa_formats[format].n_a; i++)
+		igt_debug("\tB%u = %lu\n", i, deltas[idx++]);
+
+	for (int i = 0; i < oa_formats[format].n_c; i++)
+		igt_debug("\tC%u = %lu\n", i, deltas[idx++]);
 }
 
 /* The TestOa metric set is designed so */
@@ -3237,7 +3266,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			struct igt_buf src[3], dst[3];
 			drm_intel_bo *bo;
 			uint32_t *report0_32, *report1_32;
-			uint32_t *prev, *lprev;
+			uint32_t *prev;
 			uint64_t timestamp0_64, timestamp1_64;
 			uint32_t delta_ts64, delta_oa32;
 			uint64_t delta_ts64_ns, delta_oa32_ns;
@@ -3248,9 +3277,9 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			uint32_t ctx1_id = 0xffffffff;  /* invalid handle */
 			bool in_ctx = true;
 			int ret;
-			struct counters_record *records =
-				counters_record_allocate(test_oa_format),
-				*all_records = counters_record_allocate(test_oa_format);
+			struct accumulator accumulator = {
+				.format = test_oa_format
+			};
 
 			//igt_drop_root();
 
@@ -3373,7 +3402,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			igt_assert_eq(report0_32[0], 0xdeadbeef); /* report ID */
 			igt_assert_neq(report0_32[1], 0); /* timestamp */
 			//report0_32[2] = 0xffffffff;
-			prev = lprev = report0_32;
+			prev = report0_32;
 			ctx_id = prev[2];
 			igt_debug("MI_RPC(start) CTX ID: %u\n", ctx_id);
 
@@ -3383,12 +3412,12 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			//report1_32[2] = 0xffffffff;
 			ctx1_id = report1_32[2];
 
-			counters_record_reset(all_records);
-			counters_record_update(all_records, report0_32, report1_32);
-			igt_debug("total: A40_0 = %lu, A40_21 = %lu, A40_26 = %lu\n",
-				  all_records->a40_records[0],
-				  all_records->a40_records[21],
-				  all_records->a40_records[26]);
+			memset(accumulator.deltas, 0, sizeof(accumulator.deltas));
+			accumulate_reports(&accumulator, report0_32, report1_32);
+			igt_debug("total: A0 = %lu, A21 = %lu, A26 = %lu\n",
+				  accumulator.deltas[2 + 0], /* skip timestamp + clock cycles */
+				  accumulator.deltas[2 + 21],
+				  accumulator.deltas[2 + 26]);
 
 			igt_debug("oa_timestamp32 0 = %u\n", report0_32[1]);
 			igt_debug("oa_timestamp32 1 = %u\n", report1_32[1]);
@@ -3434,11 +3463,14 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			igt_assert(len > 0);
 			igt_debug("read %d bytes\n", (int)len);
 
+			memset(accumulator.deltas, 0, sizeof(accumulator.deltas));
+
 			for (size_t offset = 0; offset < len; offset += header->size) {
 				uint32_t *report;
 				uint32_t reason;
 				bool skip = false;
-				const char *skip_reason, *report_reason;
+				int out_duration = 0;
+				const char *state, *report_reason;
 
 				header = (void *)(buf + offset);
 
@@ -3472,34 +3504,6 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 
 				report = (void *)(header + 1);
 
-				counters_record_reset(all_records);
-				counters_record_update(all_records, lprev, report);
-
-				reason = ((report[0] >> OAREPORT_REASON_SHIFT) &
-					  OAREPORT_REASON_MASK);
-				report_reason = "none";
-				if (reason & OAREPORT_REASON_CTX_SWITCH) {
-					report_reason = "ctx-switch";
-				} else if (reason & OAREPORT_REASON_TIMER) {
-					report_reason = "timer";
-				}
-
-				igt_debug("report %p: ctx_id=%u/%x reason=%x/%s "
-					  "timestamp=%u A40_0=%lu A40_21=%lu A40_26=%lu\n",
-					  report, report[2], report[2],
-					  report[0], report_reason, report[1],
-					  all_records->a40_records[0],
-					  all_records->a40_records[21],
-					  all_records->a40_records[26]);
-
-				/*
-				 * Annoying cases to consider:
-				 *
-				 * back to back switches for the specific ctx:
-				 *	- are they away, then to, or to then away?
-				 *	- we need to disambiguate switching two or from
-				 */
-
 				/* Don't expect zero for timestamps */
 				igt_assert_neq(report[1], 0);
 
@@ -3509,7 +3513,6 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 					if (timebase_scale(time_delta) > 1000000000) {
 						igt_debug(" Skipping report earlier than first MI_RPC (%u)\n",
 							  prev[1]);
-						lprev = report;
 						continue;
 					}
 				}
@@ -3523,88 +3526,196 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 					}
 				}
 
-				if (in_ctx &&
-				    (reason & OAREPORT_REASON_CTX_SWITCH) &&
-				    report[2] != ctx_id) {
-					/* Consider only switch-away when a ctx-switch report.
-					 *
-					 * It seems we can get 2 ctx-switch reports to the
-					 * same ctx_id with a timer report in between :
-					 *
-					 * report6: ctx_id=0x10       reason=ctx-switch
-					 * report7: ctx_id=0x42       reason=ctx-switch
-					 * report8: ctx_id=0xffffffff reason=timer
-					 * report9: ctx_id=0x42       reason=ctx-switch
-					 *
-					 * While we do not want to accumulate the values from
-					 * report7, it seems we need to include the report9,
-					 * otherwise we're missing some deltas.
-					 *
-					 * We also notice reports like this :
-					 *
-					 * report6: ctx_id=0x10       reason=ctx-switch
-					 * report7: ctx_id=0x42       reason=ctx-switch
-					 * report8: ctx_id=0x42       reason=ctx-switch
-					 *
-					 * Here as well we want to count report8 but ignore
-					 * report7.
-					 */
-					skip_reason = "Switch AWAY (observed by ID change)";
-					in_ctx = false;
-				} else if (in_ctx == false &&
-					   report[2] == ctx_id && (reason & OAREPORT_REASON_CTX_SWITCH)) {
-					/* Consider that we might have already observed
-					 * a switch-to via a periodic report...
-					 */
+				if (report == report1_32) {
+					reason = 0;
+					report_reason = "end-mi-rpc";
+				} else {
+					reason = ((report[0] >> OAREPORT_REASON_SHIFT) &
+						  OAREPORT_REASON_MASK);
+					report_reason = "none";
+					if (reason & OAREPORT_REASON_CTX_SWITCH) {
+						report_reason = "ctx-load";
+					} else if (reason & OAREPORT_REASON_TIMER) {
+						report_reason = "timer";
+					}
+				}
 
-					/* Note it's possible to see sequences of
-					 * switch-to reports since there's no
-					 * switch-away report triggered by the hardware
-					 * and the same context may be scheduled back
-					 * to back. In this case we will accumulate
-					 * between sequential switch-away reports.
-					 */
-					skip_reason = "Switch TO (report reason = CTX_SWITCH)";
+				igt_debug("report %p: ctx_id=%u/%x reason=%x/%s oa_timestamp32=%u\n",
+					  report, report[2], report[2],
+					  report[0], report_reason, report[1]);
+
+
+				/* The objective now is to update our state
+				 * machine tracking whether we are IN or OUT of
+				 * the context we are filtering for to know
+				 * whether we should accumulate the deltas
+				 * between this current pair of reports.
+				 *
+				 * Some details that make this fiddly:
+				 *
+				 * - We don't have automatically triggered
+				 *   marker reports when switching away from
+				 *   or saving a context.
+				 *
+				 * - We have marker reports when loading a
+				 *   context (badly named _REASON_CTX_SWITCH)
+				 *
+				 * - We may see the same context be loaded via
+				 *   sequential _REASON_CTX_SWITCH reports.
+				 *
+				 * - Sometimes periodic reports identify a
+				 *   context switch before any
+				 *   _REASON_CTX_SWITCH reports so it's best to
+				 *   ignore the reason and just look at the
+				 *   context IDs to infer changes.
+				 *
+				 * - If the HW goes idle after some work we
+				 *   might see isolated reports with an invalid
+				 *   context ID interleaved within a sequence
+				 *   of _REASON_CTX_SWITCH reports for our
+				 *   context. We should not skip any
+				 *   accumulation of reports here.
+				 *
+				 *   The key issue here is that the reports are
+				 *   isolated so there are no pairs that
+				 *   belonged to this other invalid context
+				 *   state.
+				 *
+				 * Consider these scenarios (filtering for 0x42)
+				 *
+				 * Idle state between repeat schedules might
+				 * result in periodic reports sequenced like...
+				 * 0) 0x42:mi_rpc
+				 * 1) 0x42:ctx_switch
+				 * 2) 0x42:ctx_switch
+				 * 3) 0xff:periodic
+				 * 4) 0x42:ctx_switch
+				 * 5) 0x42:mi_rpc
+				 * should accumulate [0-1][1-2][2-3][3-4][4-5]
+				 *
+				 * 0) 0x42:mi_rpc
+				 * 1) 0x42:ctx_switch
+				 * 2) 0x01:ctx_switch
+				 * 3) 0xff:periodic
+				 * 4) 0x42:ctx_switch
+				 * 5) 0x42:mi_rpc
+				 * should accumulate [0-1][1-2][4-5]
+				 *
+				 * 0) 0x42:mi_rpc
+				 * 1) 0x01:ctx_switch
+				 * 2) 0x02:ctx_switch
+				 * 3) 0x03:ctx_switch
+				 * 4) 0x42:ctx_switch
+				 * 5) 0x42:mi_rpc
+				 * should accumulate [0-1][4-5]
+				 *
+				 * Periodic sample can be first indication of
+				 * switch...
+				 * 0) 0x42:mi_rpc
+				 * 1) 0x01:periodic
+				 * 2) 0x01:ctx_switch
+				 * 3) 0x42:ctx_switch
+				 * 4) 0x42:mi_rpc
+				 * should accumulate [0-1][3-4]
+				 */
+
+#warning "XXX: it's probably important to check whether the invalid ctx ID flag can ever be set while there's an active context"
+				 /* We might want to tweak the checks below so
+				  * we look at the valid_context_id flag in the
+				  * reports and only affect the IN/OUT state if
+				  * the report has the valid_context_id flag
+				  * set.
+				  *
+				  * Notably this would change the behaviour
+				  * if we get multiple periodic reports while
+				  * idle between scheduling the filter context
+				  * multiple times back-to-back. It would
+				  * mean we would attribute that idle time to
+				  * the filter context. (Could be argued either
+				  * way whether that's desirable)
+				  */
+
+
+				 /* logically it wouldn't make sense to be
+				  * considering the last MI_RPC with the prev
+				  * report not associated with the filter
+				  * context. Maybe similar to the situation
+				  * with periodic reports we can learn about a
+				  * context switch from an MI_RPC report before
+				  * a _CTX_SWITCH report arrives.
+				  */
+				if (report == report1_32 && in_ctx == false) {
 					in_ctx = true;
-					skip = true;
+					prev = report;
+				}
+#warning "XXX: scrutinize this a bit more, this seems a little mad"
+
+
+				if (in_ctx && report[2] != ctx_id) {
+					state = "Switch AWAY (observed by ID change)";
+					in_ctx = false;
+					out_duration = 0;
 				} else if (in_ctx == false && report[2] == ctx_id) {
-					/* Note: here we're being careful to consider
-					 * the possibility of a _CTX_SWITCH switch-away
-					 * (with matching ctx_id) followed by a periodic/timer
-					 * report (also with matching ctx_id) due to
-					 * repeat scheduling of the same context
+					/* Note: we don't care about the reason,
+					 * since we can sometimes learn about a
+					 * switch from a periodic sample before
+					 * a _CTX_SWITCH report arrives
 					 */
-					skip_reason = "Switch TO (observed by ID change)";
+					state = "Switch TO (observed by ID change)";
 					in_ctx = true;
-					skip = true;
+
+					/* If we observed multiple sequential
+					 * reports not for our filter context
+					 * then the previous report doesn't
+					 * relate to this context.
+					 *
+					 * On the other hand if we e.g. just
+					 * saw one periodic sample while idle
+					 * between rescheduling our filter
+					 * context then we're not able to
+					 * subtract anything related to being
+					 * idle and we have to include the idle
+					 * time as part of our filtered
+					 * results.
+					 *
+					 * On the *other* hand (so what I have
+					 * three hands!) if we were to see
+					 * multiple periodic reports while idle
+					 * due to a higher sampling frequency
+					 * that represents a duration of time
+					 * we can choose to ignore / skip.
+					 * It's arguable whether that's
+					 * desirable for the idle case.
+					 */
+					if (out_duration > 1)
+						skip = true;
 				} else if (in_ctx) {
 					igt_assert(report[2] == ctx_id ||
 						   (reason & OAREPORT_REASON_CTX_SWITCH) == 0);
-					skip_reason = "CONTINUATION IN";
+					state = "CONTINUATION IN";
 				} else {
 					igt_assert_eq(in_ctx, false);
 					//igt_assert_neq(prev[2], ctx_id);
 					igt_assert_neq(report[2], ctx_id);
-					skip_reason = "CONTINUATION OUT";
+					state = "CONTINUATION OUT";
+					out_duration++;
 					skip = true;
 				}
 
-				/* Don't accumulate deltas in between context switch
-				 * reports, where counter increases belong to other
-				 * contexts
-				 */
+				igt_debug(" -> State = %s\n", state);
+
 				if (!skip) {
-					counters_record_update(records, prev, report);
-					igt_debug(" -> Updating records A40_0=%lu A40_21=%lu, A40_26=%lu\n",
-						  records->a40_records[0],
-						  records->a40_records[21],
-						  records->a40_records[26]);
+					accumulate_reports(&accumulator, prev, report);
+					igt_debug(" -> Accumulated deltas A0=%lu A21=%lu, A26=%lu\n",
+						  accumulator.deltas[2 + 0], /* skip timestamp + clock cycles */
+						  accumulator.deltas[2 + 21],
+						  accumulator.deltas[2 + 26]);
 				} else {
-					igt_debug(" -> Skipping : %s\n", skip_reason);
+					igt_debug(" -> Skipping\n");
 				}
 
 
-				prev = lprev = report;
+				prev = report;
 
 				if (report == report1_32) {
 					igt_debug("Breaking on end of report\n");
@@ -3615,10 +3726,10 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			}
 			
 			igt_debug("n samples written = %ld/%lu (%ix%i)\n",
-				  records->a40_records[21],
-				  records->a40_records[26],
+				  accumulator.deltas[2 + 21],/* skip timestamp + clock cycles */
+				  accumulator.deltas[2 + 26],
 				  width, height);
-			counters_record_print(records, "filtered");
+			accumulator_print(&accumulator, "filtered");
 
 			ret = drm_intel_bo_map(src[0].bo, false /* write enable */);
 			igt_assert_eq(ret, 0);
@@ -3627,7 +3738,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			
 			ret = memcmp(src[0].bo->virtual, dst[0].bo->virtual, 4 * width * height);
 			if (ret != 0) {
-				counters_record_print(all_records, "total");
+				accumulator_print(&accumulator, "total");
 				/* This needs to be investigated... From time
 				   to time, the work we kick off doesn't seem
 				   to happen. WTH?? */
@@ -3638,9 +3749,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			drm_intel_bo_unmap(src[0].bo);
 			drm_intel_bo_unmap(dst[0].bo);
 			
-			igt_assert_eq(records->a40_records[26], width * height);
-
-			counters_record_free(records);
+			igt_assert_eq(accumulator.deltas[2 + 26], width * height);
 
 			for (int i = 0; i < ARRAY_SIZE(src); i++) {
 				drm_intel_bo_unreference(src[i].bo);
