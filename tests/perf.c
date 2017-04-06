@@ -3485,7 +3485,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 					 * It's arguable whether that's
 					 * desirable for the idle case.
 					 */
-					if (out_duration > 1)
+					if (out_duration >= 1)
 						skip = true;
 				} else if (in_ctx) {
 					igt_assert(report[2] == ctx_id ||
