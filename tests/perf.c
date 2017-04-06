@@ -3522,6 +3522,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 
 					if (timebase_scale(time_delta) <= 1000000000) {
 						igt_debug(" Report comes after last MI_RPC (%u)\n", report1_32[1]);
+						prev = report;
 						report = report1_32;
 					}
 				}
@@ -3646,7 +3647,6 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 				  */
 				if (report == report1_32 && in_ctx == false) {
 					in_ctx = true;
-					prev = report;
 				}
 #warning "XXX: scrutinize this a bit more, this seems a little mad"
 
