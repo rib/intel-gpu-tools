@@ -3266,7 +3266,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			struct igt_buf src[3], dst[3];
 			drm_intel_bo *bo;
 			uint32_t *report0_32, *report1_32;
-			uint32_t *prev;
+			uint32_t *prev, *lprev;
 			uint64_t timestamp0_64, timestamp1_64;
 			uint32_t delta_ts64, delta_oa32;
 			uint64_t delta_ts64_ns, delta_oa32_ns;
@@ -3402,7 +3402,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			igt_assert_eq(report0_32[0], 0xdeadbeef); /* report ID */
 			igt_assert_neq(report0_32[1], 0); /* timestamp */
 			//report0_32[2] = 0xffffffff;
-			prev = report0_32;
+			prev = lprev = report0_32;
 			ctx_id = prev[2];
 			igt_debug("MI_RPC(start) CTX ID: %u\n", ctx_id);
 
@@ -3471,6 +3471,10 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 				bool skip = false;
 				int out_duration = 0;
 				const char *state, *report_reason;
+				struct accumulator laccumulator = {
+					.format = test_oa_format
+				};
+
 
 				header = (void *)(buf + offset);
 
@@ -3503,6 +3507,17 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 				igt_assert_eq(header->size, sample_size);
 
 				report = (void *)(header + 1);
+
+				/* Print out deltas for a few significant
+				 * counters for each report. */
+				memset(laccumulator.deltas, 0, sizeof(laccumulator.deltas));
+				accumulate_reports(&laccumulator, lprev, report);
+				igt_debug("report %p:\n", report);
+				igt_debug("    deltas: A0=%lu A21=%lu, A26=%lu\n",
+					  laccumulator.deltas[2 + 0], /* skip timestamp + clock cycles */
+					  laccumulator.deltas[2 + 21],
+					  laccumulator.deltas[2 + 26]);
+				lprev = report;
 
 				/* Don't expect zero for timestamps */
 				igt_assert_neq(report[1], 0);
@@ -3541,8 +3556,8 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 					}
 				}
 
-				igt_debug("report %p: ctx_id=%u/%x reason=%x/%s oa_timestamp32=%u\n",
-					  report, report[2], report[2],
+				igt_debug("    ctx_id=%u/%x reason=%x/%s oa_timestamp32=%u\n",
+					  report[2], report[2],
 					  report[0], report_reason, report[1]);
 
 
