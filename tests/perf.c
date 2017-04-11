@@ -1657,12 +1657,27 @@ test_oa_exponents(int gt_freq_mhz)
 			 * to sysfs then skip looking at this pair of reports
 			 */
 			if (gt_freq_mhz_0 != gt_freq_mhz_1) {
-				igt_debug("skipping OA reports pair due to GT frequency change according to sysfs\n");
+				igt_debug("skipping OA reports pair due to GT"
+					  " frequency change according to sysfs %i/%i\n",
+					  gt_freq_mhz_0, gt_freq_mhz_1);
 				continue;
 			}
 
 			timestamp_delta = oa_report1[1] - oa_report0[1];
 			igt_assert_neq(timestamp_delta, 0);
+
+			time_delta = timebase_scale(timestamp_delta);
+
+			ticks0 = read_report_ticks(oa_report0, test_oa_format);
+			ticks1 = read_report_ticks(oa_report1, test_oa_format);
+			clock_delta = ticks1 - ticks0;
+
+			freq = ((uint64_t)clock_delta * 1000) / time_delta;
+			igt_debug("ITER %d: time delta = %"PRIu32"(ns) clock delta = %"PRIu32" freq = %"PRIu32"(mhz)\n",
+				  j, time_delta, clock_delta, freq);
+
+			igt_debug("est_timestamp=%u\n", gt_freq_mhz_0 * clock_delta);
+
 
 			if (timestamp_delta == expected_timestamp_delta)
 				n_time_delta_matches++;
@@ -1677,19 +1692,14 @@ test_oa_exponents(int gt_freq_mhz)
 					   (expected_timestamp_delta * 2));
 			}
 
-			ticks0 = read_report_ticks(oa_report0, test_oa_format);
-			ticks1 = read_report_ticks(oa_report1, test_oa_format);
-			clock_delta = ticks1 - ticks0;
-
-			time_delta = timebase_scale(timestamp_delta);
-
-			freq = ((uint64_t)clock_delta * 1000) / time_delta;
-			igt_debug("ITER %d: time delta = %"PRIu32"(ns) clock delta = %"PRIu32" freq = %"PRIu32"(mhz)\n",
-				  j, time_delta, clock_delta, freq);
-
                         if (freq < (gt_freq_mhz_1 + freq_margin) &&
                             freq > (gt_freq_mhz_1 - freq_margin))
 				n_freq_matches++;
+			else {
+				igt_debug("unexpected frequency %i (expected range %i-%i)\n",
+					  freq, gt_freq_mhz_1 - freq_margin,
+					  gt_freq_mhz_1 + freq_margin);
+			}
 
 			n_tested++;
 		}
