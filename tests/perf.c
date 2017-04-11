@@ -28,6 +28,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/times.h>
@@ -799,6 +800,16 @@ gt_frequency_range_save(void)
 	gt_max_freq_mhz = gt_max_freq_mhz_saved;
 }
 
+static void wait_freq_settle(void)
+{
+	struct timespec ts;
+
+	/* FIXME: Lazy sleep without check. */
+	ts.tv_sec = 0;
+	ts.tv_nsec = 20000;
+	clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, NULL);
+}
+
 static void
 gt_frequency_pin(int gt_freq_mhz)
 {
@@ -813,6 +824,8 @@ gt_frequency_pin(int gt_freq_mhz)
 	}
 	gt_min_freq_mhz = gt_freq_mhz;
 	gt_max_freq_mhz = gt_freq_mhz;
+
+	wait_freq_settle();
 }
 
 static void
@@ -1402,6 +1415,194 @@ test_oa_formats(void)
 	}
 }
 
+
+enum load {
+	LOW,
+	HIGH
+};
+
+static struct load_helper {
+	int devid;
+	int has_ppgtt;
+	drm_intel_bufmgr *bufmgr;
+	struct intel_batchbuffer *batch;
+	drm_intel_bo *target_buffer;
+	enum load load;
+	bool exit;
+	struct igt_helper_process igt_proc;
+	drm_intel_bo *src, *dst;
+} lh;
+
+static void load_helper_signal_handler(int sig)
+{
+	if (sig == SIGUSR2)
+		lh.load = lh.load == LOW ? HIGH : LOW;
+	else
+		lh.exit = true;
+}
+
+static void emit_store_dword_imm(uint32_t val)
+{
+	int cmd;
+	struct intel_batchbuffer *batch = lh.batch;
+
+	cmd = MI_STORE_DWORD_IMM;
+	if (!lh.has_ppgtt)
+		cmd |= MI_MEM_VIRTUAL;
+
+	BEGIN_BATCH(4, 0); /* just ignore the reloc we emit and count dwords */
+	OUT_BATCH(cmd);
+	if (batch->gen >= 8) {
+		OUT_RELOC(lh.target_buffer, I915_GEM_DOMAIN_INSTRUCTION,
+			  I915_GEM_DOMAIN_INSTRUCTION, 0);
+	} else {
+		OUT_BATCH(0); /* reserved */
+		OUT_RELOC(lh.target_buffer, I915_GEM_DOMAIN_INSTRUCTION,
+			  I915_GEM_DOMAIN_INSTRUCTION, 0);
+	}
+	OUT_BATCH(val);
+	ADVANCE_BATCH();
+}
+
+#define LOAD_HELPER_PAUSE_USEC 500
+#define LOAD_HELPER_BO_SIZE (16*1024*1024)
+static void load_helper_set_load(enum load load)
+{
+	igt_assert(lh.igt_proc.running);
+
+	if (lh.load == load)
+		return;
+
+	lh.load = load;
+	kill(lh.igt_proc.pid, SIGUSR2);
+}
+
+static void load_helper_run(enum load load)
+{
+	/*
+	 * FIXME fork helpers won't get cleaned up when started from within a
+	 * subtest, so handle the case where it sticks around a bit too long.
+	 */
+	if (lh.igt_proc.running) {
+		load_helper_set_load(load);
+		return;
+	}
+
+	lh.load = load;
+
+	igt_fork_helper(&lh.igt_proc) {
+		const uint32_t bbe = MI_BATCH_BUFFER_END;
+		struct drm_i915_gem_exec_object2 object;
+		struct drm_i915_gem_execbuffer2 execbuf;
+		uint32_t fences[3];
+		uint32_t val = 0;
+
+		signal(SIGUSR1, load_helper_signal_handler);
+		signal(SIGUSR2, load_helper_signal_handler);
+
+		fences[0] = gem_create(drm_fd, 4096);
+		gem_write(drm_fd, fences[0], 0,  &bbe, sizeof(bbe));
+		fences[1] = gem_create(drm_fd, 4096);
+		gem_write(drm_fd, fences[1], 0,  &bbe, sizeof(bbe));
+		fences[2] = gem_create(drm_fd, 4096);
+		gem_write(drm_fd, fences[2], 0,  &bbe, sizeof(bbe));
+
+		memset(&execbuf, 0, sizeof(execbuf));
+		execbuf.buffers_ptr = (uintptr_t)&object;
+		execbuf.buffer_count = 1;
+		if (intel_gen(lh.devid) >= 6)
+			execbuf.flags = I915_EXEC_BLT;
+
+		while (!lh.exit) {
+			memset(&object, 0, sizeof(object));
+			object.handle = fences[val%3];
+
+			while (gem_bo_busy(drm_fd, object.handle))
+				usleep(100);
+
+			if (lh.load == HIGH)
+				intel_copy_bo(lh.batch, lh.dst, lh.src,
+					      LOAD_HELPER_BO_SIZE);
+
+			emit_store_dword_imm(val);
+			intel_batchbuffer_flush_on_ring(lh.batch,
+                                                        I915_EXEC_BLT);
+			val++;
+
+			gem_execbuf(drm_fd, &execbuf);
+
+			/* Lower the load by pausing after every submitted
+			 * write. */
+			if (lh.load == LOW)
+				usleep(LOAD_HELPER_PAUSE_USEC);
+		}
+
+		/* Wait for completion without boosting */
+		usleep(1000);
+		while (gem_bo_busy(drm_fd, lh.target_buffer->handle))
+			usleep(1000);
+
+		igt_debug("load helper sent %u dword writes\n", val);
+		gem_close(drm_fd, fences[0]);
+		gem_close(drm_fd, fences[1]);
+		gem_close(drm_fd, fences[2]);
+	}
+}
+
+static void load_helper_stop(void)
+{
+	kill(lh.igt_proc.pid, SIGUSR1);
+	igt_assert(igt_wait_helper(&lh.igt_proc) == 0);
+}
+
+static void load_helper_init(void)
+{
+	lh.devid = intel_get_drm_devid(drm_fd);
+	lh.has_ppgtt = gem_uses_ppgtt(drm_fd);
+
+	/* MI_STORE_DATA can only use GTT address on gen4+/g33 and needs
+	 * snoopable mem on pre-gen6. Hence load-helper only works on gen6+, but
+	 * that's also all we care about for the rps testcase*/
+	igt_assert(intel_gen(lh.devid) >= 6);
+	lh.bufmgr = drm_intel_bufmgr_gem_init(drm_fd, 4096);
+	igt_assert(lh.bufmgr);
+
+	drm_intel_bufmgr_gem_enable_reuse(lh.bufmgr);
+
+	lh.batch = intel_batchbuffer_alloc(lh.bufmgr, lh.devid);
+	igt_assert(lh.batch);
+
+	lh.target_buffer = drm_intel_bo_alloc(lh.bufmgr, "target bo",
+					      4096, 4096);
+	igt_assert(lh.target_buffer);
+
+	lh.dst = drm_intel_bo_alloc(lh.bufmgr, "dst bo",
+				    LOAD_HELPER_BO_SIZE, 4096);
+	igt_assert(lh.dst);
+	lh.src = drm_intel_bo_alloc(lh.bufmgr, "src bo",
+				    LOAD_HELPER_BO_SIZE, 4096);
+	igt_assert(lh.src);
+}
+
+static void load_helper_deinit(void)
+{
+	if (lh.igt_proc.running)
+		load_helper_stop();
+
+	if (lh.target_buffer)
+		drm_intel_bo_unreference(lh.target_buffer);
+	if (lh.src)
+		drm_intel_bo_unreference(lh.src);
+	if (lh.dst)
+		drm_intel_bo_unreference(lh.dst);
+
+	if (lh.batch)
+		intel_batchbuffer_free(lh.batch);
+
+	if (lh.bufmgr)
+		drm_intel_bufmgr_destroy(lh.bufmgr);
+}
+
 static void
 test_oa_exponents(int gt_freq_mhz)
 {
@@ -1421,6 +1622,9 @@ test_oa_exponents(int gt_freq_mhz)
 	 * iteration of this test to take this into account.
 	 */
 	gt_frequency_pin(gt_freq_mhz);
+
+	load_helper_init();
+	load_helper_run(LOW);
 
 	igt_debug("Testing OA timer exponents with requested GT frequency = %dmhz\n",
 		  gt_freq_mhz);
@@ -1557,6 +1761,9 @@ test_oa_exponents(int gt_freq_mhz)
 	}
 
 	gt_frequency_range_restore();
+
+	load_helper_stop();
+	load_helper_deinit();
 }
 
 /* The OA exponent selects a timestamp counter bit to trigger reports on.
