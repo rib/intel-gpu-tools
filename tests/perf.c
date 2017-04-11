@@ -448,6 +448,28 @@ gen8_read_report_ticks(uint32_t *report, enum drm_i915_oa_format format)
 	return report[3];
 }
 
+static const char *
+gen8_read_report_reason(const uint32_t *report)
+{
+	uint32_t reason = ((report[0] >> OAREPORT_REASON_SHIFT) &
+			   OAREPORT_REASON_MASK);
+
+	if (reason & (1<<0))
+		return "timer";
+	else if (reason & (1<<1))
+	      return "internal trigger 1";
+	else if (reason & (1<<2))
+	      return "internal trigger 2";
+	else if (reason & (1<<3))
+	      return "context switch";
+	else if (reason & (1<<4))
+	      return "GO 1->0 transition (enter RC6)";
+	else if (reason & (1<<5))
+		return "[un]slice clock ratio change";
+	else
+		return "unknown";
+}
+
 static uint64_t
 timebase_scale(uint32_t u32_delta)
 {
@@ -879,7 +901,7 @@ init_sys_info(void)
 				test_set_uuid = "882fa433-1f4a-4a67-a962-c741888fe5f5";
 				break;
 			default:
-				igt_debug("unsupport Skylake GT size\n");
+				igt_debug("unsupported Skylake GT size\n");
 				return false;
 			}
 			timestamp_frequency = 12000000;
@@ -1300,8 +1322,9 @@ read_2_oa_reports(int format_id,
 							   OAREPORT_REASON_MASK);
 
 					if (!(reason & OAREPORT_REASON_TIMER)) {
-						igt_debug("skipping non timer report reason=%x\n",
-							  reason);
+						igt_debug("skipping non timer report reason=%x/%s\n",
+							  reason,
+							  gen8_read_report_reason(report));
 						continue;
 					}
 				}
@@ -1368,28 +1391,6 @@ gen8_read_report_clock_ratios(uint32_t *report,
 
 	*slice_freq_mhz = (slice_freq * 16666) / 1000;
 	*unslice_freq_mhz = (unslice_freq * 16666) / 1000;
-}
-
-static const char *
-gen8_read_report_reason(uint32_t *report)
-{
-	uint32_t reason = ((report[0] >> OAREPORT_REASON_SHIFT) &
-			   OAREPORT_REASON_MASK);
-
-	if (reason & (1<<0))
-		return "timer";
-	else if (reason & (1<<1))
-	      return "internal trigger 1";
-	else if (reason & (1<<2))
-	      return "internal trigger 2";
-	else if (reason & (1<<3))
-	      return "context switch";
-	else if (reason & (1<<4))
-	      return "GO 1->0 transition (enter RC6)";
-	else if (reason & (1<<5))
-		return "[un]slice clock ratio change";
-	else
-		return "unknown";
 }
 
 static void
