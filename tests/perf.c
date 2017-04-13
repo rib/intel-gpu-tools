@@ -1222,7 +1222,8 @@ read_2_oa_reports(int format_id,
 		  int exponent,
 		  uint32_t *oa_report0,
 		  uint32_t *oa_report1,
-		  bool timer_only)
+		  bool timer_only,
+		  bool consistent_ctx)
 {
 	size_t format_size = oa_formats[format_id].size;
 	size_t sample_size = (sizeof(struct drm_i915_perf_record_header) +
@@ -1341,9 +1342,16 @@ read_2_oa_reports(int format_id,
 				}
 			}
 
-			if (n++ == 0)
+			if (n++ == 0) {
 				memcpy(oa_report0, report, format_size);
-			else {
+			} else {
+				if (intel_gen(devid) >= 8 && consistent_ctx &&
+				    report[2] != oa_report0[2]) {
+					igt_debug("read skip: due to request for consistent context IDs\n");
+					n = 1;
+					memcpy(oa_report0, report, format_size);
+					continue;
+				}
 				memcpy(oa_report1, report, format_size);
 				free(buf);
 				return;
@@ -1361,7 +1369,8 @@ open_and_read_2_oa_reports(int format_id,
 			   int exponent,
 			   uint32_t *oa_report0,
 			   uint32_t *oa_report1,
-			   bool timer_only)
+			   bool timer_only,
+			   bool consistent_ctx)
 {
 	uint64_t properties[] = {
 		/* Include OA reports in samples */
@@ -1382,7 +1391,9 @@ open_and_read_2_oa_reports(int format_id,
 	stream_fd = __perf_open(drm_fd, &param);
 
 	read_2_oa_reports(format_id, exponent,
-			  oa_report0, oa_report1, timer_only);
+			  oa_report0, oa_report1,
+			  timer_only,
+			  consistent_ctx);
 
 	__perf_close(stream_fd);
 }
@@ -1579,7 +1590,8 @@ test_oa_formats(void)
 					   oa_exp_1_millisec,
 					   oa_report0,
 					   oa_report1,
-					   false); /* timer reports only */
+					   false, /* not only timer reports */
+					   false); /* any context state */
 
 		print_reports(oa_report0, oa_report1, i);
 		sanity_check_reports(oa_report0, oa_report1, i);
@@ -1848,8 +1860,9 @@ test_oa_exponents(int gt_freq_mhz)
 						   i, /* exponent */
 						   oa_report0,
 						   oa_report1,
-						   true); /* timer triggered
-							     reports only */
+						   true, /* timer triggered
+							    reports only */
+						   true); /* same ctx */
 
 			gt_freq_mhz_1 = sysfs_read("gt_act_freq_mhz");
 
@@ -2810,7 +2823,8 @@ test_disabled_read_error(void)
 			  oa_exponent,
 			  oa_report0,
 			  oa_report1,
-			  false); /* not just timer reports */
+			  false, /* not just timer reports */
+			  false); /* any context id state */
 
 	do_ioctl(stream_fd, I915_PERF_IOCTL_DISABLE, 0);
 
@@ -2824,7 +2838,8 @@ test_disabled_read_error(void)
 			  oa_exponent,
 			  oa_report0,
 			  oa_report1,
-			  false); /* not just timer reports */
+			  false, /* not just timer reports */
+			  false); /* any context id state */
 
 	__perf_close(stream_fd);
 }
@@ -3808,7 +3823,8 @@ test_i915_ref_count(void)
 			  oa_exp_1_millisec,
 			  oa_report0,
 			  oa_report1,
-			  false); /* not just timer reports */
+			  false, /* not just timer reports */
+			  false); /* any context id state */
 
 	__perf_close(stream_fd);
 	ref_count0 = read_i915_module_ref();
