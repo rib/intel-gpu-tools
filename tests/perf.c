@@ -1028,6 +1028,7 @@ read_2_oa_reports(int stream_fd,
 			;
 
 		igt_assert(len > 0);
+		igt_debug("read %d bytes\n", (int)len);
 
 		for (size_t offset = 0; offset < len; offset += header->size) {
 			const uint32_t *report;
