@@ -3213,7 +3213,6 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 	igt_fork(child, 1) {
 		drm_intel_bufmgr *bufmgr;
 		drm_intel_context *context0, *context1;
-		int stream_fd;
 		struct intel_batchbuffer *batch;
 		struct igt_buf src, dst;
 		drm_intel_bo *bo;
@@ -3393,8 +3392,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 		igt_assert(delta_delta <= 500);
 
 
-		len = i915_read_reports_until_timestamp(stream_fd,
-							test_oa_format,
+		len = i915_read_reports_until_timestamp(test_oa_format,
 							buf, buf_size,
 							report0_32[1],
 							report1_32[1]);
@@ -3557,7 +3555,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 		drm_intel_gem_context_destroy(context0);
 		drm_intel_gem_context_destroy(context1);
 		drm_intel_bufmgr_destroy(bufmgr);
-		close(stream_fd);
+		__perf_close(stream_fd);
 	}
 
 	igt_waitchildren();
