@@ -1234,17 +1234,6 @@ read_2_oa_reports(int format_id,
 	 * should scrape *all* pending records.
 	 *
 	 * The largest buffer the OA unit supports is 16MB.
-	 *
-	 * Being sure we are fetching all buffered reports allows us to
-	 * potentially throw away / skip all reports whenever we see
-	 * a _REPORT_LOST notification as a way of being sure are
-	 * measurements aren't skewed by a lost report.
-	 *
-	 * Note: that is is useful for some tests but also not something
-	 * applications would be expected to resort to. Lost reports are
-	 * somewhat unpredictable but typically don't pose a problem - except
-	 * to indicate that the OA unit may be over taxed if lots of reports
-	 * are being lost.
 	 */
 	int max_reports = (16 * 1024 * 1024) / format_size;
 	int buf_size = sample_size * max_reports * 1.5;
@@ -1287,10 +1276,16 @@ read_2_oa_reports(int format_id,
 				igt_debug("read restart: OA trigger collision / report lost\n");
 				n = 0;
 
-				/* XXX: break, because we don't know where
-				 * within the series of already read reports
-				 * there could be a blip from the lost report.
+				/* Disable and re-enable the stream to
+				 * effectively scrap the existing contents of
+				 * the OABUFFER since anything currently
+				 * buffered might be affected by the lost
+				 * report.
 				 */
+				do_ioctl(stream_fd, I915_PERF_IOCTL_DISABLE, 0);
+				do_ioctl(stream_fd, I915_PERF_IOCTL_ENABLE, 0);
+
+				/* break to the outer retry loop */
 				break;
 			}
 
