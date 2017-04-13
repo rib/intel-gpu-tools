@@ -1896,8 +1896,12 @@ test_oa_exponents(int gt_freq_mhz)
 					  oa_report0[1], oa_report0[1],
 					  oa_report1[1], oa_report1[1]);
 				print_reports(oa_report0, oa_report1, test_oa_format);
-				igt_assert(timestamp_delta <
-					   (expected_timestamp_delta * 2));
+
+				igt_assert_f(timestamp_delta <
+					     (expected_timestamp_delta * 2),
+					     "timestamp_delta < (expected_timestamp_delta * 2): %d < %d\n",
+					     timestamp_delta,
+					     (expected_timestamp_delta * 2));
 			}
 
                         if (freq < (gt_freq_mhz_1 + freq_margin) &&
@@ -1924,7 +1928,8 @@ test_oa_exponents(int gt_freq_mhz)
 		 * in practice it seems very rare for that not to be the case
 		 * so it a useful sanity check to assert quite strictly...
 		 */
-		igt_assert(n_time_delta_matches >= 9);
+		igt_assert_f(n_time_delta_matches >= 9,
+			     "n_time_delta_matches = %d < 9\n", n_time_delta_matches);
 
 		igt_debug("number of iterations with expected clock frequency = %d\n",
 			  n_freq_matches);
