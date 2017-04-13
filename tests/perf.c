@@ -923,8 +923,7 @@ gt_frequency_range_restore(void)
 }
 
 static int
-i915_read_reports_until_timestamp(int stream_fd,
-				  enum drm_i915_oa_format oa_format,
+i915_read_reports_until_timestamp(enum drm_i915_oa_format oa_format,
 				  uint8_t *buf,
 				  uint32_t max_size,
 				  uint32_t start_timestamp,
