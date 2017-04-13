@@ -1268,6 +1268,9 @@ read_2_oa_reports(int format_id,
 
 			igt_assert_eq(header->pad, 0); /* Reserved */
 
+			/* Records are always expected to be 8 byte aligned */
+			igt_assert_eq(((uintptr_t)header) & 0x7, 0);
+
 			/* Currently the only test that should ever expect to
 			 * see a _BUFFER_LOST error is the buffer_fill test,
 			 * otherwise something bad has probably happened...
