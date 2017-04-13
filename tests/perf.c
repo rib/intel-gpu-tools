@@ -1280,6 +1280,67 @@ print_reports(uint32_t *oa_report0, uint32_t *oa_report1, int fmt)
 }
 
 static void
+print_report(uint32_t *report, int fmt)
+{
+	igt_debug("TIMESTAMP: %"PRIu32"\n", report[1]);
+
+	if (IS_HASWELL(devid) && oa_formats[fmt].n_c == 0) {
+		igt_debug("CLOCK = N/A\n");
+	} else {
+		uint32_t clock = read_report_ticks(report, fmt);
+
+		igt_debug("CLOCK: %"PRIu32"\n", clock);
+	}
+
+	if (intel_gen(devid) >= 8) {
+		uint32_t slice_freq, unslice_freq;
+		const char *reason = gen8_read_report_reason(report);
+
+		gen8_read_report_clock_ratios(report, &slice_freq, &unslice_freq);
+
+		igt_debug("SLICE CLK: %umhz\n", slice_freq);
+		igt_debug("UNSLICE CLK: %umhz\n", unslice_freq);
+		igt_debug("REASON: \"%s\"\n", reason);
+		igt_debug("CTX ID: %"PRIu32"/%"PRIx32"\n", report[2], report[2]);
+	}
+
+	/* Gen8+ has some 40bit A counters... */
+	for (int j = 0; j < oa_formats[fmt].n_a40; j++) {
+		uint64_t value = gen8_read_40bit_a_counter(report, fmt, j);
+
+		if (undefined_a_counters[j])
+			continue;
+
+		igt_debug("A%d: %"PRIu64"\n", j, value);
+	}
+
+	for (int j = 0; j < oa_formats[fmt].n_a; j++) {
+		uint32_t *a = (uint32_t *)(((uint8_t *)report) +
+					   oa_formats[fmt].a_off);
+		int a_id = oa_formats[fmt].first_a + j;
+
+		if (undefined_a_counters[a_id])
+			continue;
+
+		igt_debug("A%d: %"PRIu32"\n", a_id, a[j]);
+	}
+
+	for (int j = 0; j < oa_formats[fmt].n_b; j++) {
+		uint32_t *b = (uint32_t *)(((uint8_t *)report) +
+					   oa_formats[fmt].b_off);
+
+		igt_debug("B%d: %"PRIu32"\n", j, b[j]);
+	}
+
+	for (int j = 0; j < oa_formats[fmt].n_c; j++) {
+		uint32_t *c = (uint32_t *)(((uint8_t *)report) +
+					   oa_formats[fmt].c_off);
+
+		igt_debug("C%d: %"PRIu32"\n", j, c[j]);
+	}
+}
+
+static void
 test_oa_formats(void)
 {
 	for (int i = 0; i < ARRAY_SIZE(oa_formats); i++) {
