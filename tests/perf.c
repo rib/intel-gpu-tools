@@ -1078,23 +1078,36 @@ read_2_oa_reports(int stream_fd,
 			igt_assert_neq(report[1], 0);
 
 			if (timer_only) {
-				/* For Haswell we don't have a documented
-				 * report reason field (though empirically
-				 * report[0] bit 10 does seem to correlate with
-				 * a timer trigger reason) so we instead infer
-				 * which reports are timer triggered by
-				 * checking if the least significant bits are
-				 * zero and the exponent bit is set.
-				 */
-				if ((report[1] & exponent_mask) != (1 << exponent)) {
-					igt_debug("skipping non timer report reason=%x\n",
-						  report[0]);
-
-					/* Also assert our hypothesis about the
-					 * reason bit...
+				if (IS_HASWELL(devid)) {
+					/* For Haswell we don't have a
+					 * documented report reason field
+					 * (though empirically report[0] bit 10
+					 * does seem to correlate with a timer
+					 * trigger reason) so we instead infer
+					 * which reports are timer triggered by
+					 * checking if the least significant
+					 * bits are zero and the exponent bit
+					 * is set.
 					 */
-					igt_assert_eq(report[0] & (1 << 10), 0);
-					continue;
+					if ((report[1] & exponent_mask) != (1 << exponent)) {
+						igt_debug("skipping non timer report reason=%x\n",
+							  report[0]);
+
+						/* Also assert our hypothesis about the
+						 * reason bit...
+						 */
+						igt_assert_eq(report[0] & (1 << 10), 0);
+						continue;
+					}
+				} else {
+					uint32_t reason = ((report[0] >> OAREPORT_REASON_SHIFT) &
+							   OAREPORT_REASON_MASK);
+
+					if (!(reason & OAREPORT_REASON_TIMER)) {
+						igt_debug("skipping non timer report reason=%x\n",
+							  reason);
+						continue;
+					}
 				}
 			}
 
