@@ -1217,7 +1217,7 @@ test_missing_sample_flags(void)
 	do_ioctl_err(drm_fd, DRM_IOCTL_I915_PERF_OPEN, &param, EINVAL);
 }
 
-static int
+static void
 read_2_oa_reports(int format_id,
 		  int exponent,
 		  uint32_t *oa_report0,
@@ -1291,7 +1291,7 @@ read_2_oa_reports(int format_id,
 				 * within the series of already read reports
 				 * there could be a blip from the lost report.
 				 */
-				return EAGAIN;
+				break;
 			}
 
 			/* Currently the only other record type expected is a
@@ -1351,7 +1351,7 @@ read_2_oa_reports(int format_id,
 			else {
 				memcpy(oa_report1, report, format_size);
 				free(buf);
-				return 0;
+				return;
 			}
 		}
 	}
@@ -1359,8 +1359,6 @@ read_2_oa_reports(int format_id,
 	free(buf);
 
 	igt_assert(!"reached");
-
-	return EIO;
 }
 
 static void
@@ -1388,9 +1386,8 @@ open_and_read_2_oa_reports(int format_id,
 
 	stream_fd = __perf_open(drm_fd, &param);
 
-	while (read_2_oa_reports(format_id, exponent,
-				 oa_report0, oa_report1, timer_only) == EAGAIN)
-		;
+	read_2_oa_reports(format_id, exponent,
+			  oa_report0, oa_report1, timer_only);
 
 	__perf_close(stream_fd);
 }
@@ -2814,12 +2811,11 @@ test_disabled_read_error(void)
 	param.flags &= ~I915_PERF_FLAG_DISABLED;
 	stream_fd = __perf_open(drm_fd, &param);
 
-	while (read_2_oa_reports(test_oa_format,
-				 oa_exponent,
-				 oa_report0,
-				 oa_report1,
-				 false) == EAGAIN) /* not just timer reports */
-		;
+	read_2_oa_reports(test_oa_format,
+			  oa_exponent,
+			  oa_report0,
+			  oa_report1,
+			  false); /* not just timer reports */
 
 	do_ioctl(stream_fd, I915_PERF_IOCTL_DISABLE, 0);
 
@@ -2829,12 +2825,11 @@ test_disabled_read_error(void)
 
 	do_ioctl(stream_fd, I915_PERF_IOCTL_ENABLE, 0);
 
-	while (!read_2_oa_reports(test_oa_format,
-				  oa_exponent,
-				  oa_report0,
-				  oa_report1,
-				  false)) /* not just timer reports */
-		;
+	read_2_oa_reports(test_oa_format,
+			  oa_exponent,
+			  oa_report0,
+			  oa_report1,
+			  false); /* not just timer reports */
 
 	__perf_close(stream_fd);
 }
