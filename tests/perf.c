@@ -2478,14 +2478,25 @@ emit_stall_timestamp_and_rpc(struct intel_batchbuffer *batch,
 				   PIPE_CONTROL_RENDER_TARGET_FLUSH |
 				   PIPE_CONTROL_WRITE_TIMESTAMP);
 
-	BEGIN_BATCH(5, 1);
-	OUT_BATCH(GFX_OP_PIPE_CONTROL | (5 - 2));
-	OUT_BATCH(pipe_ctl_flags);
-	OUT_RELOC(dst, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-		  timestamp_offset);
-	OUT_BATCH(0); /* imm lower */
-	OUT_BATCH(0); /* imm upper */
-	ADVANCE_BATCH();
+	if (intel_gen(devid) >= 8) {
+		BEGIN_BATCH(5, 1);
+		OUT_BATCH(GFX_OP_PIPE_CONTROL | (6 - 2));
+		OUT_BATCH(pipe_ctl_flags);
+		OUT_RELOC(dst, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
+			  timestamp_offset);
+		OUT_BATCH(0); /* imm lower */
+		OUT_BATCH(0); /* imm upper */
+		ADVANCE_BATCH();
+	} else {
+		BEGIN_BATCH(5, 1);
+		OUT_BATCH(GFX_OP_PIPE_CONTROL | (5 - 2));
+		OUT_BATCH(pipe_ctl_flags);
+		OUT_RELOC(dst, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
+			  timestamp_offset);
+		OUT_BATCH(0); /* imm lower */
+		OUT_BATCH(0); /* imm upper */
+		ADVANCE_BATCH();
+	}
 
 	emit_report_perf_count(batch, dst, report_dst_offset, report_id);
 }
