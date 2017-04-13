@@ -1359,6 +1359,7 @@ test_oa_exponents(int gt_freq_mhz)
 		uint32_t freq;
 		int n_tested = 0;
 		int n_freq_matches = 0;
+		int n_time_delta_matches = 0;
 
 #warning "XXX: it seems pretty odd that the time delta assertion failures centre around these exponents"
 		if (i == 6 || i == 7 || i == 8)
@@ -1400,14 +1401,18 @@ test_oa_exponents(int gt_freq_mhz)
 			timestamp_delta = oa_report1[1] - oa_report0[1];
 			igt_assert_neq(timestamp_delta, 0);
 
-			if (timestamp_delta != expected_timestamp_delta) {
-				igt_debug("timestamp0 = %u/0x%x\n",
-					  oa_report0[1], oa_report0[1]);
-				igt_debug("timestamp1 = %u/0x%x\n",
+			if (timestamp_delta == expected_timestamp_delta)
+				n_time_delta_matches++;
+			else {
+				igt_debug("timestamp delta mismatch: %"PRIu64"ns != expected %"PRIu64"ns, ts0 = %u/0x%x, ts1 = %u/0x%x\n",
+					  timebase_scale(timestamp_delta),
+					  timebase_scale(expected_timestamp_delta),
+					  oa_report0[1], oa_report0[1],
 					  oa_report1[1], oa_report1[1]);
+				print_reports(oa_report0, oa_report1, test_oa_format);
+				igt_assert(timestamp_delta <
+					   (expected_timestamp_delta * 2));
 			}
-
-			igt_assert_eq(timestamp_delta, expected_timestamp_delta);
 
 			ticks0 = read_report_ticks(oa_report0, test_oa_format);
 			ticks1 = read_report_ticks(oa_report1, test_oa_format);
@@ -1429,6 +1434,16 @@ test_oa_exponents(int gt_freq_mhz)
 		if (n_tested < 10)
 			igt_debug("sysfs frequency pinning too unstable for cross-referencing with OA derived frequency");
 		igt_assert_eq(n_tested, 10);
+
+		igt_debug("number of iterations with expected timestamp delta = %d\n",
+			  n_time_delta_matches);
+
+		/* The HW doesn't give us any strict guarantee that the
+		 * timestamps are exactly aligned with the exponent mask but
+		 * in practice it seems very rare for that not to be the case
+		 * so it a useful sanity check to assert quite strictly...
+		 */
+		igt_assert(n_time_delta_matches >= 9);
 
 		igt_debug("number of iterations with expected clock frequency = %d\n",
 			  n_freq_matches);
