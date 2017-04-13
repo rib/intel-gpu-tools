@@ -3046,7 +3046,7 @@ igt_main
 	igt_subtest("mi-rpc")
 		test_mi_rpc();
 
-	igt_subtest("unprivileged-singled-ctx-counters") {
+	igt_subtest("unprivileged-single-ctx-counters") {
 		/* For Gen8+ the OA unit can no longer be made to clock gate
 		 * for a specific context. Additionally the partial-replacement
 		 * functionality to HW filter timer reports for a specific
