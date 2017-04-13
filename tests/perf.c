@@ -1002,9 +1002,7 @@ read_2_oa_reports(int stream_fd,
 	/* Note: we allocate a large buffer so that each read() iteration
 	 * should scrape *all* pending records.
 	 *
-	 * The largest buffer the OA unit supports is 16MB and the smallest
-	 * OA report format is 64bytes allowing up to 262144 reports to
-	 * be buffered.
+	 * The largest buffer the OA unit supports is 16MB.
 	 *
 	 * Being sure we are fetching all buffered reports allows us to
 	 * potentially throw away / skip all reports whenever we see
@@ -1017,7 +1015,8 @@ read_2_oa_reports(int stream_fd,
 	 * to indicate that the OA unit may be over taxed if lots of reports
 	 * are being lost.
 	 */
-	int buf_size = 262144 * (64 + sizeof(struct drm_i915_perf_record_header));
+	int max_reports = (16 * 1024 * 1024) / format_size;
+	int buf_size = sample_size * max_reports * 1.5;
 	uint8_t *buf = malloc(buf_size);
 	int n = 0;
 
