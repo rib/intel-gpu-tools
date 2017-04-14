@@ -3292,7 +3292,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			int height = 600;
 			uint32_t ctx_id = 0xffffffff; /* invalid handle */
 			uint32_t ctx1_id = 0xffffffff;  /* invalid handle */
-			uint32_t current_ctx_id = 0xffffffff;
+			uint32_t prev_ctx_id = 0xffffffff;
 			uint32_t n_invalid_ctx = 0;
 			int ret;
 			struct accumulator accumulator = {
@@ -3421,7 +3421,7 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 			igt_assert_neq(report0_32[1], 0); /* timestamp */
 			//report0_32[2] = 0xffffffff;
 			prev = report0_32;
-			ctx_id = prev[2];
+			ctx_id = prev_ctx_id = prev[2];
 			igt_debug("MI_RPC(start) CTX ID: %u\n", ctx_id);
 
 			report1_32 = report0_32 + 64; /* 64 uint32_t = 256bytes offset */
@@ -3585,12 +3585,12 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 				 *   the stream is not the one we want
 				 *   to measure.
 				 */
-				if (current_ctx_id != ctx_id) {
+				if (prev_ctx_id != ctx_id) {
 					skip_reason = "not our context";
 				}
 
 				if (n_invalid_ctx > 1) {
-					skip_reason = "too many invalid context events";
+					skip_reason = "sequential reports while idle";
 				}
 
 				if (!skip_reason) {
@@ -3604,10 +3604,11 @@ gen8_test_single_ctx_render_target_writes_a_counter(void)
 				}
 
 
-				/* Finally update current-ctx_id, only possible
-				 * with a valid contextOB id. */
+				/* Finally update prev-ctx_id, only possible
+				 * with a valid context id.
+				 */
 				if (oa_report_ctx_is_valid(report)) {
-					current_ctx_id = report[2];
+					prev_ctx_id = report[2];
 					n_invalid_ctx = 0;
 				} else {
 					n_invalid_ctx++;
