@@ -973,7 +973,7 @@ static void
 gt_frequency_range_save(void)
 {
 	gt_min_freq_mhz_saved = sysfs_read("gt_min_freq_mhz");
-	gt_max_freq_mhz_saved = sysfs_read("gt_max_freq_mhz");
+	gt_max_freq_mhz_saved = sysfs_read("gt_boost_freq_mhz");
 
 	gt_min_freq_mhz = gt_min_freq_mhz_saved;
 	gt_max_freq_mhz = gt_max_freq_mhz_saved;
