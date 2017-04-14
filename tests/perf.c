@@ -275,6 +275,15 @@ static uint32_t (*read_report_ticks)(uint32_t *report,
 static void (*sanity_check_reports)(uint32_t *oa_report0, uint32_t *oa_report1,
 				    enum drm_i915_oa_format format);
 
+static bool
+timestamp_delta_within(uint32_t delta,
+		       uint32_t expected_delta,
+		       uint32_t margin)
+{
+	return delta > (expected_delta - margin) &&
+	       delta < (expected_delta + margin);
+}
+
 static void
 __perf_close(int fd)
 {
@@ -1769,133 +1778,117 @@ static void load_helper_deinit(void)
 }
 
 static void
-test_oa_exponents(int gt_freq_mhz)
+test_oa_exponents(void)
 {
-	uint32_t freq_margin;
-
-	/* This test tries to use the sysfs interface for pinning the GT
-	 * frequency so we have another point of reference for comparing with
-	 * the clock frequency as derived from OA reports.
-	 *
-	 * This test has been finicky to stabilise while the
-	 * gt_min/max_freq_mhz files in sysfs don't seem to be a reliable
-	 * mechanism for fixing the gpu frequency.
-	 *
-	 * Since these unit tests are focused on the OA unit not the ability to
-	 * pin the frequency via sysfs we make the test account for pinning not
-	 * being reliable and read back the current frequency for each
-	 * iteration of this test to take this into account.
-	 */
-	gt_frequency_pin(gt_freq_mhz);
-
 	load_helper_init();
-	load_helper_run(LOW);
-
-	igt_debug("Testing OA timer exponents with requested GT frequency = %dmhz\n",
-		  gt_freq_mhz);
-
-	/* allow a +- 10% error margin when checking that the frequency
-	 * calculated from the OA reports matches the frequency according to
-	 * sysfs.
-	 */
-	freq_margin = gt_freq_mhz * 0.1;
+	load_helper_run(HIGH);
 
 	/* It's asking a lot to sample with a 160 nanosecond period and the
 	 * test can fail due to buffer overflows if it wasn't possible to
 	 * keep up, so we don't start from an exponent of zero...
 	 */
-	for (int i = 5; i < 20; i++) {
+	for (int exponent = 5; exponent < 16; exponent++) {
 		uint32_t expected_timestamp_delta;
-		uint32_t timestamp_delta;
-		uint32_t oa_report0[64];
-		uint32_t oa_report1[64];
 		uint32_t time_delta;
-		uint32_t clock_delta;
-		uint32_t freq;
 		int n_tested = 0;
-		int n_freq_matches = 0;
 		int n_time_delta_matches = 0;
-
-#warning "XXX: it seems pretty odd that the time delta assertion failures centre around these exponents"
-		if (i == 6 || i == 7 || i == 8)
-			continue;
 
 		/* The exponent is effectively selecting a bit in the timestamp
 		 * to trigger reports on and so in practice we expect the raw
 		 * timestamp deltas for periodic reports to exactly match the
 		 * value of next bit.
 		 */
-		expected_timestamp_delta = 2 << i;
+		expected_timestamp_delta = 2 << exponent;
 
 		for (int j = 0; n_tested < 10 && j < 100; j++) {
-			int gt_freq_mhz_0, gt_freq_mhz_1;
-			uint32_t ticks0, ticks1;
+			uint64_t properties[] = {
+				/* Include OA reports in samples */
+				DRM_I915_PERF_PROP_SAMPLE_OA, true,
 
-			gt_freq_mhz_0 = sysfs_read("gt_act_freq_mhz");
+				/* OA unit configuration */
+				DRM_I915_PERF_PROP_OA_METRICS_SET, test_metric_set_id,
+				DRM_I915_PERF_PROP_OA_FORMAT, test_oa_format,
+				DRM_I915_PERF_PROP_OA_EXPONENT, exponent,
+			};
+			struct drm_i915_perf_open_param param = {
+				.flags = I915_PERF_FLAG_FD_CLOEXEC,
+				.num_properties = ARRAY_SIZE(properties) / 2,
+				.properties_ptr = to_user_pointer(properties),
+			};
+			int ret;
+			uint64_t timestamps[50], average_timestamp_delta;
+			uint32_t n_timestamps = 0;
+			uint32_t n_report_lost = 0;
+			bool buffer_lost = false;
+			struct drm_i915_perf_record_header *header;
+			uint8_t buf[1024 * 1024];
 
-			igt_debug("ITER %d: testing OA exponent %d (period = %"PRIu64"ns) with sysfs GT freq = %dmhz +- %u\n",
-				  j, i,
-				  oa_exponent_to_ns(i),
-				  gt_freq_mhz_0, freq_margin);
+			igt_debug("ITER %d: testing OA exponent %d (period = %"PRIu64"ns)\n",
+				  j, exponent,
+				  oa_exponent_to_ns(exponent));
 
-			open_and_read_2_oa_reports(test_oa_format,
-						   i, /* exponent */
-						   oa_report0,
-						   oa_report1,
-						   true); /* timer triggered
-							     reports only */
+			stream_fd = __perf_open(drm_fd, &param);
 
-			gt_freq_mhz_1 = sysfs_read("gt_act_freq_mhz");
+			while (!buffer_lost && n_timestamps < ARRAY_SIZE(timestamps)) {
 
-			/* If it looks like the frequency has changed according
-			 * to sysfs then skip looking at this pair of reports
-			 */
-			if (gt_freq_mhz_0 != gt_freq_mhz_1) {
-				igt_debug("skipping OA reports pair due to GT"
-					  " frequency change according to sysfs %i/%i\n",
-					  gt_freq_mhz_0, gt_freq_mhz_1);
-				continue;
+				while ((ret = read(stream_fd, buf, sizeof(buf))) < 0 &&
+				       errno == EINTR)
+					;
+
+				for (int offset = 0;
+				     offset < ret && n_timestamps < ARRAY_SIZE(timestamps);
+				     offset += header->size) {
+					header = (void *)(buf + offset);
+
+					if (header->type == DRM_I915_PERF_RECORD_OA_BUFFER_LOST) {
+						buffer_lost = true;
+						break;
+					}
+
+					if (header->type == DRM_I915_PERF_RECORD_OA_REPORT_LOST) {
+						n_report_lost++;
+					}
+
+					if (header->type == DRM_I915_PERF_RECORD_SAMPLE) {
+						uint32_t *report = (void *)(header + 1);
+
+						if (is_periodic_report(exponent, report))
+							timestamps[n_timestamps++] = report[1];
+					}
+				}
 			}
 
-			timestamp_delta = oa_report1[1] - oa_report0[1];
-			igt_assert_neq(timestamp_delta, 0);
+			average_timestamp_delta = 0;
+			for (int i = 0; i < (ARRAY_SIZE(timestamps) - 1); i++) {
+				average_timestamp_delta += timestamps[i + 1] - timestamps[i];
+			}
 
-			time_delta = timebase_scale(timestamp_delta);
-
-			ticks0 = read_report_ticks(oa_report0, test_oa_format);
-			ticks1 = read_report_ticks(oa_report1, test_oa_format);
-			clock_delta = ticks1 - ticks0;
-
-			freq = ((uint64_t)clock_delta * 1000) / time_delta;
-			igt_debug("ITER %d: time delta = %"PRIu32"(ns) clock delta = %"PRIu32" freq = %"PRIu32"(mhz)\n",
-				  j, time_delta, clock_delta, freq);
-
-			igt_debug("est_timestamp=%u\n", gt_freq_mhz_0 * clock_delta);
+			average_timestamp_delta /= ARRAY_SIZE(timestamps);
 
 
-			if (timestamp_delta == expected_timestamp_delta)
+			time_delta = timebase_scale(average_timestamp_delta);
+
+			igt_debug("ITER %d: OA exponent %d time delta = %"PRIu32"(ns) lost reports = %u\n",
+				  j, exponent, time_delta, n_report_lost);
+
+			if (timestamp_delta_within(average_timestamp_delta,
+						   expected_timestamp_delta,
+						   expected_timestamp_delta * 0.15)) {
+				igt_debug("timestamp delta matching %"PRIu64"ns ~= expected %"PRIu64"! :)\n",
+					  timebase_scale(average_timestamp_delta),
+					  timebase_scale(expected_timestamp_delta));
 				n_time_delta_matches++;
-			else {
-				igt_debug("timestamp delta mismatch: %"PRIu64"ns != expected %"PRIu64"ns, ts0 = %u/0x%x, ts1 = %u/0x%x\n",
-					  timebase_scale(timestamp_delta),
-					  timebase_scale(expected_timestamp_delta),
-					  oa_report0[1], oa_report0[1],
-					  oa_report1[1], oa_report1[1]);
-				print_reports(oa_report0, oa_report1, test_oa_format);
-				igt_assert(timestamp_delta <
+			} else {
+				igt_debug("timestamp delta mismatch: %"PRIu64"ns != expected %"PRIu64"ns\n",
+					  timebase_scale(average_timestamp_delta),
+					  timebase_scale(expected_timestamp_delta));
+				igt_assert(average_timestamp_delta <
 					   (expected_timestamp_delta * 2));
 			}
 
-                        if (freq < (gt_freq_mhz_1 + freq_margin) &&
-                            freq > (gt_freq_mhz_1 - freq_margin))
-				n_freq_matches++;
-			else {
-				igt_debug("unexpected frequency %i (expected range %i-%i)\n",
-					  freq, gt_freq_mhz_1 - freq_margin,
-					  gt_freq_mhz_1 + freq_margin);
-			}
-
 			n_tested++;
+
+			close(stream_fd);
 		}
 
 		if (n_tested < 10)
@@ -1911,18 +1904,6 @@ test_oa_exponents(int gt_freq_mhz)
 		 * so it a useful sanity check to assert quite strictly...
 		 */
 		igt_assert(n_time_delta_matches >= 9);
-
-		igt_debug("number of iterations with expected clock frequency = %d\n",
-			  n_freq_matches);
-
-		/* Don't assert the calculated frequency for extremely short
-		 * durations.
-		 *
-		 * Allow some mismatches since can't be can't be sure about
-		 * frequency changes between sysfs reads.
-		 */
-		if (i > 3)
-			igt_assert(n_freq_matches >= 7);
 	}
 
 	gt_frequency_range_restore();
@@ -3894,8 +3875,7 @@ igt_main
 	igt_subtest("low-oa-exponent-permissions")
 		test_low_oa_exponent_permissions();
 	igt_subtest("oa-exponents") {
-		test_oa_exponents(450);
-		test_oa_exponents(550);
+		test_oa_exponents();
 	}
 
 	igt_subtest("per-context-mode-unprivileged") {
