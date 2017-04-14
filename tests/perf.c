@@ -2275,15 +2275,6 @@ test_blocking(void)
 		  kernel_ns, (int)tick_ns,
 		  (int)start_times.tms_stime, (int)end_times.tms_stime);
 
-	/* Technically, more of a HW sanity check but e.g. on SKL by default
-	 * slice/unslice clock ratio reports can drown out periodic reports.
-	 *
-	 * We want to notice if there are (non-periodic) automatic reports
-	 * being generated at an unexpectedly high frequency since they
-	 * will probably cause excessive work in userspace to process.
-	 */
-	igt_assert(n_extra_iterations < (max_iterations / 2));
-
 	/* With completely broken blocking (but also not returning an error) we
 	 * could end up with an open loop,
 	 */
@@ -2468,15 +2459,6 @@ test_polling(void)
 	igt_debug("time in kernelspace = %"PRIu64"ns (+-%dns) (start stime = %d, end = %d)\n",
 		  kernel_ns, (int)tick_ns,
 		  (int)start_times.tms_stime, (int)end_times.tms_stime);
-
-	/* Technically, more of a HW sanity check but e.g. on SKL by default
-	 * slice/unslice clock ratio reports can drown out periodic reports.
-	 *
-	 * We want to notice if there are (non-periodic) automatic reports
-	 * being generated at an unexpectedly high frequency since they
-	 * will probably cause excessive work in userspace to process.
-	 */
-	igt_assert(n_extra_iterations < (max_iterations / 2));
 
 	/* With completely broken blocking while polling (but still somehow
 	 * reporting a POLLIN event) we could end up with an open loop.
