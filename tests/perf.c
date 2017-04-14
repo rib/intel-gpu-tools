@@ -2629,21 +2629,60 @@ test_enable_disable(void)
 		igt_assert_eq(len, -1);
 		igt_assert_eq(errno, EIO);
 
-		do_ioctl(stream_fd, I915_PERF_IOCTL_ENABLE, 0);
+		/* We want to measure only the period reports, ctx-switch might
+		 * inflate the content of the buffer and skew or measurement.
+		 */
+		for (bool report_loss = true; report_loss; ) {
+			struct drm_i915_perf_record_header *header;
 
-		nanosleep(&(struct timespec){ .tv_sec = 0,
-					      .tv_nsec = fill_duration / 2 },
-			  NULL);
+			do_ioctl(stream_fd, I915_PERF_IOCTL_ENABLE, 0);
 
-		while ((len = read(stream_fd, buf, buf_size)) == -1 && errno == EINTR)
-			;
+			nanosleep(&(struct timespec){ .tv_sec = 0,
+						      .tv_nsec = fill_duration / 2 },
+				NULL);
 
-		igt_assert_neq(len, -1);
+			report_loss = false;
 
-		igt_assert(len > report_size * n_full_oa_reports * 0.45);
-		igt_assert(len < report_size * n_full_oa_reports * 0.55);
+			while ((len = read(stream_fd, buf, buf_size)) == -1 && errno == EINTR)
+				;
 
-		do_ioctl(stream_fd, I915_PERF_IOCTL_DISABLE, 0);
+			igt_assert_neq(len, -1);
+
+			periodic_reports_count = 0;
+
+			for (int offset = 0; offset < len; offset += header->size) {
+				uint32_t *report;
+
+				header = (void *) (buf + offset);
+				report = (void *) (header + 1);
+				if (header->type == DRM_I915_PERF_RECORD_OA_REPORT_LOST) {
+					report_loss = true;
+					break;
+				} else if (header->type == DRM_I915_PERF_RECORD_SAMPLE) {
+					if (IS_HASWELL(devid)) {
+						if ((report[1] & oa_exponent_mask) != (1 << oa_exponent))
+							periodic_reports_count++;
+					} else {
+						if ((report[0] >> OAREPORT_REASON_SHIFT) &
+						    OAREPORT_REASON_TIMER)
+							periodic_reports_count++;
+					}
+				}
+			}
+
+			do_ioctl(stream_fd, I915_PERF_IOCTL_DISABLE, 0);
+		}
+
+		igt_debug("%f < %lu < %f\n",
+			  report_size * n_full_oa_reports * 0.45,
+			  periodic_reports_count * report_size,
+			  report_size * n_full_oa_reports * 0.55);
+
+		igt_assert((periodic_reports_count * report_size) >
+			   (report_size * n_full_oa_reports * 0.45));
+		igt_assert((periodic_reports_count * report_size) <
+			   report_size * n_full_oa_reports * 0.55);
+
 
 		/* It's considered an error to read a stream while it's disabled
 		 * since it would block indefinitely...
