@@ -555,6 +555,38 @@ oa_report_ctx_is_valid(uint32_t *report)
 	igt_assert(!"reached");
 }
 
+static void
+scratch_buf_memset(drm_intel_bo *bo, int width, int height, uint32_t color)
+{
+	int ret;
+
+	ret = drm_intel_bo_map(bo, true /* writable */);
+	igt_assert_eq(ret, 0);
+
+	for (int i = 0; i < width * height; i++)
+		((uint32_t *)bo->virtual)[i] = color;
+
+	drm_intel_bo_unmap(bo);
+}
+
+static void
+scratch_buf_init(drm_intel_bufmgr *bufmgr,
+		 struct igt_buf *buf,
+		 int width, int height,
+		 uint32_t color)
+{
+	size_t stride = width * 4;
+	size_t size = stride * height;
+	drm_intel_bo *bo = drm_intel_bo_alloc(bufmgr, "", size, 4096);
+
+	scratch_buf_memset(bo, width, height, color);
+
+	buf->bo = bo;
+	buf->stride = stride;
+	buf->tiling = I915_TILING_NONE;
+	buf->size = size;
+}
+
 
 static void
 hsw_sanity_check_render_basic_reports(uint32_t *oa_report0, uint32_t *oa_report1,
@@ -2977,38 +3009,6 @@ test_mi_rpc(void)
 	drm_intel_gem_context_destroy(context);
 	drm_intel_bufmgr_destroy(bufmgr);
 	__perf_close(stream_fd);
-}
-
-static void
-scratch_buf_memset(drm_intel_bo *bo, int width, int height, uint32_t color)
-{
-	int ret;
-
-	ret = drm_intel_bo_map(bo, true /* writable */);
-	igt_assert_eq(ret, 0);
-
-	for (int i = 0; i < width * height; i++)
-		((uint32_t *)bo->virtual)[i] = color;
-
-	drm_intel_bo_unmap(bo);
-}
-
-static void
-scratch_buf_init(drm_intel_bufmgr *bufmgr,
-		 struct igt_buf *buf,
-		 int width, int height,
-		 uint32_t color)
-{
-	size_t stride = width * 4;
-	size_t size = stride * height;
-	drm_intel_bo *bo = drm_intel_bo_alloc(bufmgr, "", size, 4096);
-
-	scratch_buf_memset(bo, width, height, color);
-
-	buf->bo = bo;
-	buf->stride = stride;
-	buf->tiling = I915_TILING_NONE;
-	buf->size = size;
 }
 
 static void
