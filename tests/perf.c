@@ -2609,6 +2609,7 @@ test_enable_disable(void)
 
 	for (int i = 0; i < 5; i++) {
 		int len;
+		uint32_t periodic_reports_count;
 
 		/* Giving enough time for an overflow might help catch whether
 		 * the OA unit has been enabled even if the driver might at
@@ -2654,14 +2655,8 @@ test_enable_disable(void)
 					report_loss = true;
 					break;
 				} else if (header->type == DRM_I915_PERF_RECORD_SAMPLE) {
-					if (IS_HASWELL(devid)) {
-						if ((report[1] & oa_exponent_mask) != (1 << oa_exponent))
-							periodic_reports_count++;
-					} else {
-						if ((report[0] >> OAREPORT_REASON_SHIFT) &
-						    OAREPORT_REASON_TIMER)
-							periodic_reports_count++;
-					}
+					periodic_reports_count += is_periodic_report(oa_exponent,
+										     report);
 				}
 			}
 
