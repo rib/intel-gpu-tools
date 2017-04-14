@@ -1639,13 +1639,15 @@ static struct load_helper {
 	int devid;
 	int has_ppgtt;
 	drm_intel_bufmgr *bufmgr;
+	drm_intel_context *context;
+	uint32_t context_id;
 	struct intel_batchbuffer *batch;
 	drm_intel_bo *target_buffer;
 	enum load load;
 	bool exit;
 	struct igt_helper_process igt_proc;
-	drm_intel_bo *src, *dst;
-} lh;
+	struct igt_buf src, dst;
+} lh = { 0, };
 
 static void load_helper_signal_handler(int sig)
 {
@@ -1653,29 +1655,6 @@ static void load_helper_signal_handler(int sig)
 		lh.load = lh.load == LOW ? HIGH : LOW;
 	else
 		lh.exit = true;
-}
-
-static void emit_store_dword_imm(uint32_t val)
-{
-	int cmd;
-	struct intel_batchbuffer *batch = lh.batch;
-
-	cmd = MI_STORE_DWORD_IMM;
-	if (!lh.has_ppgtt)
-		cmd |= MI_MEM_VIRTUAL;
-
-	BEGIN_BATCH(4, 0); /* just ignore the reloc we emit and count dwords */
-	OUT_BATCH(cmd);
-	if (batch->gen >= 8) {
-		OUT_RELOC(lh.target_buffer, I915_GEM_DOMAIN_INSTRUCTION,
-			  I915_GEM_DOMAIN_INSTRUCTION, 0);
-	} else {
-		OUT_BATCH(0); /* reserved */
-		OUT_RELOC(lh.target_buffer, I915_GEM_DOMAIN_INSTRUCTION,
-			  I915_GEM_DOMAIN_INSTRUCTION, 0);
-	}
-	OUT_BATCH(val);
-	ADVANCE_BATCH();
 }
 
 #define LOAD_HELPER_PAUSE_USEC 500
@@ -1705,61 +1684,30 @@ static void load_helper_run(enum load load)
 	lh.load = load;
 
 	igt_fork_helper(&lh.igt_proc) {
-		const uint32_t bbe = MI_BATCH_BUFFER_END;
-		struct drm_i915_gem_exec_object2 object;
-		struct drm_i915_gem_execbuffer2 execbuf;
-		uint32_t fences[3];
-		uint32_t val = 0;
-
 		signal(SIGUSR1, load_helper_signal_handler);
 		signal(SIGUSR2, load_helper_signal_handler);
 
-		fences[0] = gem_create(drm_fd, 4096);
-		gem_write(drm_fd, fences[0], 0,  &bbe, sizeof(bbe));
-		fences[1] = gem_create(drm_fd, 4096);
-		gem_write(drm_fd, fences[1], 0,  &bbe, sizeof(bbe));
-		fences[2] = gem_create(drm_fd, 4096);
-		gem_write(drm_fd, fences[2], 0,  &bbe, sizeof(bbe));
-
-		memset(&execbuf, 0, sizeof(execbuf));
-		execbuf.buffers_ptr = (uintptr_t)&object;
-		execbuf.buffer_count = 1;
-		if (intel_gen(lh.devid) >= 6)
-			execbuf.flags = I915_EXEC_BLT;
-
 		while (!lh.exit) {
-			memset(&object, 0, sizeof(object));
-			object.handle = fences[val%3];
+			int ret;
 
-			while (gem_bo_busy(drm_fd, object.handle))
-				usleep(100);
+			render_copy(lh.batch,
+				    lh.context,
+				    &lh.src, 0, 0, 1920, 1080,
+				    &lh.dst, 0, 0);
 
-			if (lh.load == HIGH)
-				intel_copy_bo(lh.batch, lh.dst, lh.src,
-					      LOAD_HELPER_BO_SIZE);
+			intel_batchbuffer_flush_with_context(lh.batch,
+							     lh.context);
 
-			emit_store_dword_imm(val);
-			intel_batchbuffer_flush_on_ring(lh.batch,
-                                                        I915_EXEC_BLT);
-			val++;
+			ret = drm_intel_gem_context_get_id(lh.context,
+							   &lh.context_id);
+			igt_assert_eq(ret, 0);
 
-			gem_execbuf(drm_fd, &execbuf);
 
 			/* Lower the load by pausing after every submitted
 			 * write. */
 			if (lh.load == LOW)
 				usleep(LOAD_HELPER_PAUSE_USEC);
 		}
-
-		/* Wait for completion without boosting */
-		usleep(1000);
-		while (gem_bo_busy(drm_fd, lh.target_buffer->handle))
-			usleep(1000);
-
-		igt_debug("load helper sent %u dword writes\n", val);
-		gem_close(drm_fd, fences[0]);
-		gem_close(drm_fd, fences[1]);
-		gem_close(drm_fd, fences[2]);
 	}
 }
 
@@ -1771,6 +1719,8 @@ static void load_helper_stop(void)
 
 static void load_helper_init(void)
 {
+	int ret;
+
 	lh.devid = intel_get_drm_devid(drm_fd);
 	lh.has_ppgtt = gem_uses_ppgtt(drm_fd);
 
@@ -1783,19 +1733,19 @@ static void load_helper_init(void)
 
 	drm_intel_bufmgr_gem_enable_reuse(lh.bufmgr);
 
+	lh.context = drm_intel_gem_context_create(lh.bufmgr);
+	igt_assert(lh.context);
+
+	lh.context_id = 0xffffffff;
+	ret = drm_intel_gem_context_get_id(lh.context, &lh.context_id);
+	igt_assert_eq(ret, 0);
+	igt_assert_neq(lh.context_id, 0xffffffff);
+
 	lh.batch = intel_batchbuffer_alloc(lh.bufmgr, lh.devid);
 	igt_assert(lh.batch);
 
-	lh.target_buffer = drm_intel_bo_alloc(lh.bufmgr, "target bo",
-					      4096, 4096);
-	igt_assert(lh.target_buffer);
-
-	lh.dst = drm_intel_bo_alloc(lh.bufmgr, "dst bo",
-				    LOAD_HELPER_BO_SIZE, 4096);
-	igt_assert(lh.dst);
-	lh.src = drm_intel_bo_alloc(lh.bufmgr, "src bo",
-				    LOAD_HELPER_BO_SIZE, 4096);
-	igt_assert(lh.src);
+	scratch_buf_init(lh.bufmgr, &lh.dst, 1920, 1080, 0);
+	scratch_buf_init(lh.bufmgr, &lh.src, 1920, 1080, 0);
 }
 
 static void load_helper_deinit(void)
@@ -1803,15 +1753,16 @@ static void load_helper_deinit(void)
 	if (lh.igt_proc.running)
 		load_helper_stop();
 
-	if (lh.target_buffer)
-		drm_intel_bo_unreference(lh.target_buffer);
-	if (lh.src)
-		drm_intel_bo_unreference(lh.src);
-	if (lh.dst)
-		drm_intel_bo_unreference(lh.dst);
+	if (lh.src.bo)
+		drm_intel_bo_unreference(lh.src.bo);
+	if (lh.dst.bo)
+		drm_intel_bo_unreference(lh.dst.bo);
 
 	if (lh.batch)
 		intel_batchbuffer_free(lh.batch);
+
+	if (lh.context)
+		drm_intel_gem_context_destroy(lh.context);
 
 	if (lh.bufmgr)
 		drm_intel_bufmgr_destroy(lh.bufmgr);
