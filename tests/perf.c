@@ -1714,7 +1714,8 @@ static void load_helper_run(enum load load)
 							   &lh.context_id);
 			igt_assert_eq(ret, 0);
 
-
+			drm_intel_bo_wait_rendering(lh.dst.bo);
+			
 			/* Lower the load by pausing after every submitted
 			 * write. */
 			if (lh.load == LOW)
