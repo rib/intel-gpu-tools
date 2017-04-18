@@ -1787,7 +1787,7 @@ test_oa_exponents(void)
 	 * test can fail due to buffer overflows if it wasn't possible to
 	 * keep up, so we don't start from an exponent of zero...
 	 */
-	for (int exponent = 5; exponent < 16; exponent++) {
+	for (int exponent = 5; exponent < 20; exponent++) {
 		uint32_t expected_timestamp_delta;
 		uint32_t time_delta;
 		int n_tested = 0;
@@ -1819,17 +1819,21 @@ test_oa_exponents(void)
 			uint64_t timestamps[50], average_timestamp_delta;
 			uint32_t n_timestamps = 0;
 			uint32_t n_report_lost = 0;
-			bool buffer_lost = false;
+			//bool buffer_lost = false;
 			struct drm_i915_perf_record_header *header;
 			uint8_t buf[1024 * 1024];
+			uint64_t delta_delta;
+			double error;
 
-			igt_debug("ITER %d: testing OA exponent %d (period = %"PRIu64"ns)\n",
+			igt_debug("ITER %d: testing OA exponent %d (expected ts delta = %u (%"PRIu64"ns)\n",
 				  j, exponent,
+				  expected_timestamp_delta,
 				  oa_exponent_to_ns(exponent));
 
 			stream_fd = __perf_open(drm_fd, &param);
 
-			while (!buffer_lost && n_timestamps < ARRAY_SIZE(timestamps)) {
+			//while (!buffer_lost && n_timestamps < ARRAY_SIZE(timestamps)) {
+			while (n_timestamps < ARRAY_SIZE(timestamps)) {
 
 				while ((ret = read(stream_fd, buf, sizeof(buf))) < 0 &&
 				       errno == EINTR)
@@ -1841,7 +1845,8 @@ test_oa_exponents(void)
 					header = (void *)(buf + offset);
 
 					if (header->type == DRM_I915_PERF_RECORD_OA_BUFFER_LOST) {
-						buffer_lost = true;
+						//buffer_lost = true;
+						igt_assert(!"reached");
 						break;
 					}
 
@@ -1858,28 +1863,68 @@ test_oa_exponents(void)
 				}
 			}
 
+			close(stream_fd);
+
+			//igt_assert_eq(buffer_lost, 0);
+			//if (buffer_lost) {
+			//	igt_debug("> skipping test iteration due to buffer-lost notifications\n");
+			//	continue;
+			//}
+
+			igt_assert_eq(n_timestamps, ARRAY_SIZE(timestamps));
+
 			average_timestamp_delta = 0;
-			for (int i = 0; i < (ARRAY_SIZE(timestamps) - 1); i++) {
-				average_timestamp_delta += timestamps[i + 1] - timestamps[i];
+			for (int i = 0; i < (n_timestamps - 1); i++) {
+				/* XXX: calculating with u32 arithmetic to account for overflow */
+				uint32_t u32_delta = timestamps[i + 1] - timestamps[i];
+
+				average_timestamp_delta += u32_delta;
 			}
 
-			average_timestamp_delta /= ARRAY_SIZE(timestamps);
+			average_timestamp_delta /= (n_timestamps - 1);
 
 
 			time_delta = timebase_scale(average_timestamp_delta);
 
-			igt_debug("ITER %d: OA exponent %d time delta = %"PRIu32"(ns) lost reports = %u\n",
-				  j, exponent, time_delta, n_report_lost);
+			if (average_timestamp_delta > expected_timestamp_delta)
+				delta_delta  = average_timestamp_delta - expected_timestamp_delta;
+			else
+				delta_delta = expected_timestamp_delta - average_timestamp_delta;
+			error = (delta_delta / (double)expected_timestamp_delta) * 100.0;
+
+			igt_debug(" > Avg. time delta = %"PRIu32"(ns) lost reports = %u, error=%f\n",
+				  time_delta, n_report_lost, error);
+			if (error > 5) {
+				igt_debug(" > More than 5%% error: avg_ts_delta = %"PRIu64", delta_delta = %"PRIu64"\n",
+					  average_timestamp_delta, delta_delta);
+				for (int i = 0; i < (n_timestamps - 1); i++) {
+					/* XXX: calculating with u32 arithmetic to account for overflow */
+					uint32_t u32_delta = timestamps[i + 1] - timestamps[i];
+
+					if (u32_delta > expected_timestamp_delta)
+						delta_delta  = u32_delta - expected_timestamp_delta;
+					else
+						delta_delta = expected_timestamp_delta - u32_delta;
+					error = (delta_delta / (double)expected_timestamp_delta) * 100.0;
+
+					igt_debug(" > timestamp[%02d] = %-8u (error = %u%%)\n", i, u32_delta, (unsigned)error);
+				}
+			}
+
+			if (n_report_lost) {
+				igt_debug(" > skipping test iteration due to report-lost notifications\n");
+				continue;
+			}
 
 			if (timestamp_delta_within(average_timestamp_delta,
 						   expected_timestamp_delta,
 						   expected_timestamp_delta * 0.15)) {
-				igt_debug("timestamp delta matching %"PRIu64"ns ~= expected %"PRIu64"! :)\n",
+				igt_debug(" > timestamp delta matching %"PRIu64"ns ~= expected %"PRIu64"! :)\n",
 					  timebase_scale(average_timestamp_delta),
 					  timebase_scale(expected_timestamp_delta));
 				n_time_delta_matches++;
 			} else {
-				igt_debug("timestamp delta mismatch: %"PRIu64"ns != expected %"PRIu64"ns\n",
+				igt_debug(" > timestamp delta mismatch: %"PRIu64"ns != expected %"PRIu64"ns\n",
 					  timebase_scale(average_timestamp_delta),
 					  timebase_scale(expected_timestamp_delta));
 				igt_assert(average_timestamp_delta <
@@ -1887,15 +1932,13 @@ test_oa_exponents(void)
 			}
 
 			n_tested++;
-
-			close(stream_fd);
 		}
 
 		if (n_tested < 10)
-			igt_debug("sysfs frequency pinning too unstable for cross-referencing with OA derived frequency");
+			igt_debug("Too many test iterations had to be skipped\n");
 		igt_assert_eq(n_tested, 10);
 
-		igt_debug("number of iterations with expected timestamp delta = %d\n",
+		igt_debug("Number of iterations with expected timestamp delta = %d\n",
 			  n_time_delta_matches);
 
 		/* The HW doesn't give us any strict guarantee that the
