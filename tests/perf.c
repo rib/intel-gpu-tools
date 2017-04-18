@@ -1781,7 +1781,7 @@ static void
 test_oa_exponents(void)
 {
 	load_helper_init();
-	load_helper_run(HIGH);
+	load_helper_run(LOW);
 
 	/* It's asking a lot to sample with a 160 nanosecond period and the
 	 * test can fail due to buffer overflows if it wasn't possible to
