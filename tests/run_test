@@ -1,12 +1,15 @@
 #!/bin/bash
 
+count=0
 while [ true ]; do
+    echo "Passed tests : $count"
     cp /tmp/aub /tmp/aub_old
     dmesg -C
     echo 255 > /sys/module/drm/parameters/debug
-    ./perf --run-subtest gen8-unprivileged-single-ctx-counters --debug
+    ./perf --run-subtest oa-exponents --debug
     val=$?
     echo 0 > /sys/module/drm/parameters/debug
     dmesg > /tmp/kern
     [[ $val == 0 ]] || break
+    count=`expr $count + 1`
 done
