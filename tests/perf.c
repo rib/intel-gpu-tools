@@ -1822,10 +1822,14 @@ test_oa_exponents(void)
 			uint64_t timestamps[50], average_timestamp_delta;
 			uint32_t n_timestamps = 0;
 			uint32_t n_report_lost = 0;
+			uint32_t n_idle_reports = 0;
 			//bool buffer_lost = false;
 			struct drm_i915_perf_record_header *header;
 			uint8_t buf[1024 * 1024];
 			uint64_t delta_delta;
+			struct {
+				uint32_t data[64];
+			} oa_reports[ARRAY_SIZE(timestamps)];
 			double error;
 
 			igt_debug("ITER %d: testing OA exponent %d (expected ts delta = %u (%"PRIu64"ns)\n",
@@ -1860,8 +1864,14 @@ test_oa_exponents(void)
 					if (header->type == DRM_I915_PERF_RECORD_SAMPLE) {
 						uint32_t *report = (void *)(header + 1);
 
-						if (is_periodic_report(exponent, report))
-							timestamps[n_timestamps++] = report[1];
+						if (is_periodic_report(exponent, report)) {
+							timestamps[n_timestamps] = report[1];
+							memcpy(oa_reports[n_timestamps].data, report, 256);
+							n_timestamps++;
+
+							if (!oa_report_ctx_is_valid(report))
+								n_idle_reports++;
+						}
 					}
 				}
 			}
@@ -1873,6 +1883,11 @@ test_oa_exponents(void)
 			//	igt_debug("> skipping test iteration due to buffer-lost notifications\n");
 			//	continue;
 			//}
+
+			if (n_report_lost) {
+				igt_debug(" > skipping test iteration due to report-lost notifications\n");
+				continue;
+			}
 
 			igt_assert_eq(n_timestamps, ARRAY_SIZE(timestamps));
 
@@ -1895,8 +1910,8 @@ test_oa_exponents(void)
 				delta_delta = expected_timestamp_delta - average_timestamp_delta;
 			error = (delta_delta / (double)expected_timestamp_delta) * 100.0;
 
-			igt_debug(" > Avg. time delta = %"PRIu32"(ns) lost reports = %u, error=%f\n",
-				  time_delta, n_report_lost, error);
+			igt_debug(" > Avg. time delta = %"PRIu32"(ns) lost reports = %u, n idle reports = %u, error=%f\n",
+				  time_delta, n_report_lost, n_idle_reports, error);
 			if (error > 5) {
 				igt_debug(" > More than 5%% error: avg_ts_delta = %"PRIu64", delta_delta = %"PRIu64"\n",
 					  average_timestamp_delta, delta_delta);
@@ -1910,13 +1925,17 @@ test_oa_exponents(void)
 						delta_delta = expected_timestamp_delta - u32_delta;
 					error = (delta_delta / (double)expected_timestamp_delta) * 100.0;
 
-					igt_debug(" > timestamp[%02d] = %-8u (error = %u%%)\n", i, u32_delta, (unsigned)error);
+					igt_debug(" > timestamp delta from %2d to %2d = %-8u (error = %u%%)\n",
+						  i, i + 1, u32_delta, (unsigned)error);
 				}
-			}
+				for (int i = 0; i < (n_timestamps - 1); i++) {
+					uint32_t *rpt0 = oa_reports[i].data;
+					uint32_t *rpt1 = oa_reports[i+1].data;
+					igt_debug("\nreport[%d] and report[%d]:\n", i, i+1);
+					print_reports(rpt0, rpt1, test_oa_format);
+				}
 
-			if (n_report_lost) {
-				igt_debug(" > skipping test iteration due to report-lost notifications\n");
-				continue;
+				igt_assert(!"reached");
 			}
 
 			if (timestamp_delta_within(average_timestamp_delta,
