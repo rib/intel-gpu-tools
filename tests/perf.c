@@ -1838,7 +1838,6 @@ test_oa_exponents(void)
 			struct drm_i915_perf_record_header *header;
 			uint64_t delta_delta;
 			struct {
-				uint64_t timestamp;
 				uint32_t report[64];
 			} reports[30];
 			struct {
@@ -1867,7 +1866,7 @@ test_oa_exponents(void)
 				igt_assert(ret > 0);
 				reads[n_reads - 1].len = ret;
 
-				igt_debug("ITER %d: read %i bytes\n", j, ret);
+				//igt_debug("ITER %d: read %i bytes\n", j, ret);
 
 				for (int offset = 0;
 				     offset < ret && n_reports < ARRAY_SIZE(reports);
@@ -1904,22 +1903,22 @@ test_oa_exponents(void)
 					if (!is_periodic_report(exponent, report))
 						continue;
 
-					igt_debug("=> write %i timestamp=%u\n", n_reports, report[1]);
+					//igt_debug("=> write %i timestamp=%u\n", n_reports, report[1]);
 					memcpy(reports[n_reports].report, report,
 					       sizeof(reports[n_reports].report));
-					reports[n_reports].timestamp = report[1];
-					n_reports++;
 
-					/* Dismiss the series of report if we
-					 * notice clock frequency changes. */
+#if 0
 					if (n_reports > 1) {
-						double local_period =
-							(reports[n_reports - 1].report[3] - reports[n_reports - 2].report[3])  /
-							(reports[n_reports - 1].timestamp - reports[n_reports - 2].timestamp);
+						uint32_t u32_timestamp_delta = report[1] - reports[n_reports - 1].report[1];
+						uint64_t time_delta_ns = timebase_scale(u32_timestamp_delta);
+						double avg_freq = (u32_timestamp_delta * 1000000000.0) /
+							(double)time_delta_ns;
 
-						igt_debug("local period @ %lu : %f d=%lu\n",
-							  reports[n_reports - 1].timestamp, local_period,
-							  reports[n_reports - 1].timestamp - reports[n_reports - 2].timestamp);
+						igt_debug("average freq between %lu and %lu = %fhz: %f d=%lu\n",
+							  reports[n_reports - 1].report[1],
+							  report[1],
+							  avg_freq);
+#if 0
 						if ((local_period / 80.0) < 0.97) {
 							igt_debug("Noticed clock frequency change at ts=%u, dropping reports and trying again\n",
 								  report[1]);
@@ -1931,7 +1930,11 @@ test_oa_exponents(void)
 							n_reads = 0;
 							break;
 						}
+#endif
 					}
+#endif
+
+					n_reports++;
 				}
 			}
 
@@ -1948,7 +1951,7 @@ test_oa_exponents(void)
 			average_timestamp_delta = 0;
 			for (int i = 0; i < (n_reports - 1); i++) {
 				/* XXX: calculating with u32 arithmetic to account for overflow */
-				uint32_t u32_delta = reports[i + 1].timestamp - reports[i].timestamp;
+				uint32_t u32_delta = reports[i + 1].report[1] - reports[i].report[1];
 
 				average_timestamp_delta += u32_delta;
 			}
@@ -1971,7 +1974,7 @@ test_oa_exponents(void)
 					  average_timestamp_delta, delta_delta, expected_timestamp_delta);
 				for (int i = 0; i < (n_reports - 1); i++) {
 					/* XXX: calculating with u32 arithmetic to account for overflow */
-					uint32_t u32_delta = reports[i + 1].timestamp - reports[i].timestamp;
+					uint32_t u32_delta = reports[i + 1].report[1] - reports[i].report[1];
 
 					if (u32_delta > expected_timestamp_delta)
 						delta_delta  = u32_delta - expected_timestamp_delta;
@@ -1979,16 +1982,17 @@ test_oa_exponents(void)
 						delta_delta = expected_timestamp_delta - u32_delta;
 					error = (delta_delta / (double)expected_timestamp_delta) * 100.0;
 
-					igt_debug(" > ts=%lu/%lu timestamp delta from %2d to %2d = %-8u (error = %u%%)\n",
-						  reports[i + 1].timestamp, reports[i].timestamp,
+					igt_debug(" > ts=%u/%u timestamp delta from %2d to %2d = %-8u (error = %u%%)\n",
+						  reports[i].report[1], reports[i + 1].report[1],
 						  i, i + 1, u32_delta, (unsigned)error);
+
+
 				}
 				for (int r = 0; r < n_reads; r++) {
 					igt_debug(" > read\n");
 					for (int offset = 0;
 					     offset < reads[r].len;
 					     offset += header->size) {
-						int counter_print = 1;
 						uint64_t a0 = 0, aN = 0;
 
 						header = (void *) &reads[r].buf[offset];
@@ -2001,28 +2005,38 @@ test_oa_exponents(void)
 						rpt = (void *)(header + 1);
 
 						if (last) {
+							uint32_t u32_timestamp_delta = rpt[1] - last[1];
+							uint64_t time_delta_ns = timebase_scale(u32_timestamp_delta);
+							double avg_freq = (u32_timestamp_delta * 1000000000.0) /
+								(double)time_delta_ns;
+
 							a0 = gen8_read_40bit_a_counter(rpt, test_oa_format, 0) -
 								gen8_read_40bit_a_counter(last, test_oa_format, 0);
 							aN = gen8_read_40bit_a_counter(rpt, test_oa_format, 13) -
 								gen8_read_40bit_a_counter(last, test_oa_format, 13);
+
+							igt_debug(" > report ts=%u/%u is_timer=%i/%i ctx_ids=%8x/%-8x gpu_ticks=%u ts_delta_periodic=%-8u A0=%-5lu A13=%-5lu avg_freq=%f\n",
+								  last[1], rpt[1],
+								  is_periodic_report(exponent, last),
+								  is_periodic_report(exponent, rpt),
+								  oa_report_get_ctx_id(last),
+								  oa_report_get_ctx_id(rpt),
+								  (uint32_t)(rpt[3] - last[3]),
+								  last_periodic ? (uint32_t)(rpt[1] - last_periodic[1]) : 0,
+								  a0, aN,
+								  avg_freq);
+
+
 						}
 
-						igt_debug(" > report ts=%u"
-							  " ts_delta_last=%8u ts_delta_last_periodic=%8u is_timer=%i ctx_id=%8x gpu_ticks=%u A0=%lu A%i=%lu\n",
-							  rpt[1],
-							  (last != NULL) ? (rpt[1] - last[1]) : 0,
-							  (last_periodic != NULL) ? (rpt[1] - last_periodic[1]) : 0,
-							  is_periodic_report(exponent, rpt),
-							  oa_report_get_ctx_id(rpt),
-							  (last != NULL) ? (rpt[3] - last[3]) : 0,
-							  a0, counter_print, aN);
 						last = rpt;
 						if (is_periodic_report(exponent, rpt))
 							last_periodic = rpt;
 					}
 				}
 
-				igt_assert(!"reached");
+				if (average_timestamp_delta > expected_timestamp_delta)
+					igt_assert(!"reached");
 			}
 
 			if (timestamp_delta_within(average_timestamp_delta,
